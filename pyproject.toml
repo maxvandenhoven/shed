@@ -1,0 +1,38 @@
+[project]
+name = "shed"
+version = "0.1.0"
+description = "A hidden-information card game engine and agent gauntlet"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.16.6",
+    "ty>=0.0.79",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/shed"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "D"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ty.environment]
+python-version = "3.12"
