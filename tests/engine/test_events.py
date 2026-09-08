@@ -11,6 +11,7 @@ from shed.engine import (
     CardsPlayed,
     GameEnded,
     GameStarted,
+    GameState,
     HandDealt,
     ObservedEvent,
     Outcome,
@@ -18,7 +19,6 @@ from shed.engine import (
     PilePickedUp,
     PlayerId,
     Rank,
-    Ruleset,
     SlotId,
     Zone,
     build_deck,
@@ -27,19 +27,19 @@ from shed.engine import (
 )
 
 
-def test_initial_events_open_with_the_public_deal(ruleset: Ruleset) -> None:
+def test_initial_events_open_with_the_public_deal() -> None:
     """A public opening event is followed by one hand deal per seat."""
-    state = ruleset.create_initial_state(3, seed=51)
-    events = ruleset.initial_events(state)
+    state = GameState.create(3, seed=51)
+    events = state.initial_events()
     assert isinstance(events[0], GameStarted)
     assert [type(event) for event in events[1:]] == [HandDealt] * 3
     assert [event.player for event in events[1:] if isinstance(event, HandDealt)] == [1, 2, 0]
 
 
-def test_game_started_records_the_cards_visible_before_arranging(ruleset: Ruleset) -> None:
+def test_game_started_records_the_cards_visible_before_arranging() -> None:
     """Face-up cards and slot counts are public; hands are only counted."""
-    state = ruleset.create_initial_state(4, seed=52, dealer=PlayerId(2))
-    started = ruleset.initial_events(state)[0]
+    state = GameState.create(4, seed=52, dealer=PlayerId(2))
+    started = state.initial_events()[0]
     assert isinstance(started, GameStarted)
     assert started.dealer == 2
     assert started.seat_order == state.seat_order
@@ -50,10 +50,10 @@ def test_game_started_records_the_cards_visible_before_arranging(ruleset: Rulese
         assert public.hand_count == 3
 
 
-def test_hand_deals_carry_identities_only_for_their_recipient(ruleset: Ruleset) -> None:
+def test_hand_deals_carry_identities_only_for_their_recipient() -> None:
     """A private deal keeps its count for everybody and its cards for one seat."""
-    state = ruleset.create_initial_state(3, seed=53)
-    events = ruleset.initial_events(state)
+    state = GameState.create(3, seed=53)
+    events = state.initial_events()
 
     for seat in state.seat_order:
         filtered = filter_events_for(events, seat)
@@ -69,11 +69,11 @@ def test_hand_deals_carry_identities_only_for_their_recipient(ruleset: Ruleset) 
                 assert deal.cards is None
 
 
-def test_filtered_history_never_reveals_another_hand(ruleset: Ruleset) -> None:
+def test_filtered_history_never_reveals_another_hand() -> None:
     """No opponent card identity survives into a player's own history."""
-    state = ruleset.create_initial_state(2, seed=54)
-    history = filter_events_for(ruleset.initial_events(state), PlayerId(0))
-    view = ruleset.observe(state, PlayerId(0), history=history)
+    state = GameState.create(2, seed=54)
+    history = filter_events_for(state.initial_events(), PlayerId(0))
+    view = state.observe(PlayerId(0), history=history)
 
     opponent = {card.id for card in state.players[PlayerId(1)].hand}
     seen = {

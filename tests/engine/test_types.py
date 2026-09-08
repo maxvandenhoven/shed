@@ -12,6 +12,7 @@ from shed.engine import (
     AtMost,
     Card,
     CardId,
+    GameState,
     Move,
     Phase,
     PickUp,
@@ -19,7 +20,6 @@ from shed.engine import (
     Rank,
     Reveal,
     RulesConfig,
-    Ruleset,
     SlotId,
     Suit,
     Zone,
@@ -177,7 +177,7 @@ def test_correctly_typed_but_unsupported_profiles_are_rejected(
     with pytest.raises(ValueError, match=message):
         config.validate()
     with pytest.raises(ValueError, match=message):
-        Ruleset(config)
+        GameState.create(2, seed=1, rules=config)
 
 
 @pytest.mark.parametrize(

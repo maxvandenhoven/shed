@@ -17,7 +17,6 @@ from shed.engine import (
     Play,
     PlayerId,
     Rank,
-    Ruleset,
     StateInvariantError,
     Zone,
 )
@@ -44,18 +43,18 @@ def _owned_ids(state: GameState, player: PlayerId) -> set[CardId]:
     return {card.id for card in (*cards.hand, *cards.face_up)}
 
 
-def test_setup_offers_exactly_twenty_unique_arrangements(ruleset: Ruleset) -> None:
+def test_setup_offers_exactly_twenty_unique_arrangements() -> None:
     """Choosing three of six cards yields all 20 combinations, each once."""
-    state = ruleset.create_initial_state(3, seed=21)
+    state = GameState.create(3, seed=21)
     moves = state.get_legal_moves()
     assert len(moves) == 20
     assert len(set(moves)) == 20
     assert all(isinstance(move, Arrange) for move in moves)
 
 
-def test_arrangements_are_canonical_and_deterministically_ordered(ruleset: Ruleset) -> None:
+def test_arrangements_are_canonical_and_deterministically_ordered() -> None:
     """Every arrangement has ascending owned IDs, in stable combination order."""
-    state = ruleset.create_initial_state(4, seed=22)
+    state = GameState.create(4, seed=22)
     actor = state.current_player
     assert actor is not None
     owned = sorted(_owned_ids(state, actor))
@@ -65,51 +64,72 @@ def test_arrangements_are_canonical_and_deterministically_ordered(ruleset: Rules
     assert state.get_legal_moves() == moves
 
 
-def test_keeping_the_dealt_arrangement_is_legal(ruleset: Ruleset) -> None:
+def test_keeping_the_dealt_arrangement_is_legal() -> None:
     """A player may leave their dealt face-up cards exactly as they are."""
-    state = ruleset.create_initial_state(2, seed=23)
+    state = GameState.create(2, seed=23)
     actor = state.current_player
     assert actor is not None
     unchanged = arrangement(card.id for card in state.players[actor].face_up)
     assert unchanged in state.get_legal_moves()
-    ruleset.apply_move(state, unchanged)
+    state.apply_move(unchanged)
     assert state.players[actor].face_up  # Still three cards; commit comes later.
 
 
-def test_arrangements_naming_unowned_cards_are_rejected(ruleset: Ruleset) -> None:
+def test_arrangements_naming_unowned_cards_are_rejected() -> None:
     """Legality checks ownership, not just the shape of the submission."""
-    state = ruleset.create_initial_state(2, seed=24)
+    state = GameState.create(2, seed=24)
     actor = state.current_player
     assert actor is not None
     foreign = sorted(set(range(54)) - _owned_ids(state, actor))[:3]
     before = deepcopy(state)
     with pytest.raises(IllegalMoveError, match="not legal"):
-        ruleset.apply_move(state, arrangement(CardId(value) for value in foreign))
+        state.apply_move(arrangement(CardId(value) for value in foreign))
     assert state == before
 
 
 @pytest.mark.parametrize("move", [Play(Zone.HAND, Rank.FIVE, 1), PickUp()], ids=["play", "pickup"])
-def test_play_moves_are_rejected_during_setup(ruleset: Ruleset, move: Move) -> None:
+def test_play_moves_are_rejected_during_setup(move: Move) -> None:
     """Only arrangements resolve in SETUP, and rejection mutates nothing."""
-    state = ruleset.create_initial_state(2, seed=25)
+    state = GameState.create(2, seed=25)
     before = deepcopy(state)
     with pytest.raises(IllegalMoveError):
-        ruleset.apply_move(state, move)
+        state.apply_move(move)
     assert state == before
 
 
-def test_submissions_stay_private_until_everyone_has_chosen(ruleset: Ruleset) -> None:
+def test_an_observed_move_tuple_is_no_authority_over_a_later_state(picker: DeckPicker) -> None:
+    """Legality is revalidated on apply, never trusted from an earlier view.
+
+    The moves one actor observed name their own cards, so replaying one after
+    the turn has moved on must be refused rather than applied to whoever is
+    scheduled now.
+    """
+    state = GameState.create(3, seed=37)
+    first = state.current_player
+    assert first is not None
+    stale = state.observe(first).legal_moves
+
+    state.apply_move(stale[0])
+    assert state.current_player != first
+
+    before = deepcopy(state)
+    with pytest.raises(IllegalMoveError, match="not legal"):
+        state.apply_move(stale[1])
+    assert state == before
+
+
+def test_submissions_stay_private_until_everyone_has_chosen() -> None:
     """A stored arrangement changes no visible card and emits no event."""
-    state = ruleset.create_initial_state(3, seed=27)
+    state = GameState.create(3, seed=27)
     actor = state.current_player
     assert actor is not None
-    views_before = {seat: ruleset.observe(state, seat) for seat in state.seat_order}
+    views_before = {seat: state.observe(seat) for seat in state.seat_order}
     dealt = tuple(sorted(card.id for card in state.players[actor].face_up))
     swap = next(
         move for move in arranges_in(state.get_legal_moves()) if move.face_up_cards != dealt
     )
 
-    transition = ruleset.apply_move(state, swap)
+    transition = state.apply_move(swap)
 
     assert transition.events == ()
     assert state.phase is Phase.SETUP
@@ -117,24 +137,24 @@ def test_submissions_stay_private_until_everyone_has_chosen(ruleset: Ruleset) ->
     assert state.setup.submissions[actor] == swap
     assert actor not in state.setup.pending
     for seat in state.seat_order:
-        seen = ruleset.observe(state, seat)
+        seen = state.observe(seat)
         assert seen.players == views_before[seat].players
         assert seen.hand == views_before[seat].hand
 
 
-def test_view_never_exposes_pending_submissions(ruleset: Ruleset) -> None:
+def test_view_never_exposes_pending_submissions() -> None:
     """Setup submissions are absent from every observation, including the actor's."""
-    state = ruleset.create_initial_state(2, seed=28)
-    ruleset.apply_move(state, state.get_legal_moves()[7])
+    state = GameState.create(2, seed=28)
+    state.apply_move(state.get_legal_moves()[7])
     for seat in state.seat_order:
-        view = ruleset.observe(state, seat)
+        view = state.observe(seat)
         assert not hasattr(view, "setup")
         assert not hasattr(view, "submissions")
 
 
-def test_commitment_applies_every_arrangement_at_once(ruleset: Ruleset) -> None:
+def test_commitment_applies_every_arrangement_at_once() -> None:
     """The final submission commits all arrangements and emits all events."""
-    state = ruleset.create_initial_state(3, seed=29)
+    state = GameState.create(3, seed=29)
     chosen: dict[PlayerId, Arrange] = {}
     events = ()
     while state.phase is Phase.SETUP:
@@ -143,7 +163,7 @@ def test_commitment_applies_every_arrangement_at_once(ruleset: Ruleset) -> None:
         move = state.get_legal_moves()[5]
         assert isinstance(move, Arrange)
         chosen[actor] = move
-        events = ruleset.apply_move(state, move).events
+        events = state.apply_move(move).events
 
     committed = [event for event in events if isinstance(event, ArrangementCommitted)]
     assert len(committed) == len(events) == 3
@@ -158,10 +178,10 @@ def test_commitment_applies_every_arrangement_at_once(ruleset: Ruleset) -> None:
         )
 
 
-def test_commitment_enters_play_and_drops_setup_state(ruleset: Ruleset) -> None:
+def test_commitment_enters_play_and_drops_setup_state() -> None:
     """PLAY starts with no setup bookkeeping, ply zero, and a real actor."""
-    state = ruleset.create_initial_state(4, seed=30)
-    commit_unchanged(ruleset, state)
+    state = GameState.create(4, seed=30)
+    commit_unchanged(state)
     assert state.phase is Phase.PLAY
     assert state.setup is None
     assert state.current_ply == 0
@@ -171,7 +191,6 @@ def test_commitment_enters_play_and_drops_setup_state(ruleset: Ruleset) -> None:
 
 def test_opener_is_the_lowest_ordinary_rank_after_the_dealer(picker: DeckPicker) -> None:
     """The first rank found in the 3-to-ace search decides who opens."""
-    ruleset = Ruleset()
     state = build_setup_state(
         picker,
         hands={
@@ -181,13 +200,12 @@ def test_opener_is_the_lowest_ordinary_rank_after_the_dealer(picker: DeckPicker)
         },
         face_up={seat: picker.any_cards(3) for seat in (PlayerId(0), PlayerId(1), PlayerId(2))},
     )
-    commit_unchanged(ruleset, state)
+    commit_unchanged(state)
     assert state.current_player == 2
 
 
 def test_opener_ties_break_clockwise_after_the_dealer(picker: DeckPicker) -> None:
     """Two holders of the deciding rank: the one nearer after the dealer opens."""
-    ruleset = Ruleset()
     state = build_setup_state(
         picker,
         hands={
@@ -198,7 +216,7 @@ def test_opener_ties_break_clockwise_after_the_dealer(picker: DeckPicker) -> Non
         face_up={seat: picker.any_cards(3) for seat in (PlayerId(0), PlayerId(1), PlayerId(2))},
         dealer=PlayerId(1),
     )
-    commit_unchanged(ruleset, state)
+    commit_unchanged(state)
     assert state.current_player == 2  # Order after dealer 1 is 2, 0, 1.
 
 
@@ -206,7 +224,6 @@ def test_opener_falls_back_through_the_rank_order_to_twos_and_jokers(
     picker: DeckPicker,
 ) -> None:
     """Specials come last: a two only opens when no ordinary rank is held."""
-    ruleset = Ruleset()
     state = build_setup_state(
         picker,
         hands={
@@ -215,13 +232,12 @@ def test_opener_falls_back_through_the_rank_order_to_twos_and_jokers(
         },
         face_up={seat: picker.any_cards(3) for seat in (PlayerId(0), PlayerId(1))},
     )
-    commit_unchanged(ruleset, state)
+    commit_unchanged(state)
     assert state.current_player == 1  # Twos beat jokers; seat 1 follows the dealer.
 
 
 def test_opener_is_chosen_from_hands_after_arranging_not_before(picker: DeckPicker) -> None:
     """Swapping a low card onto the table moves the opening decision elsewhere."""
-    ruleset = Ruleset()
     low, high = picker.one(Rank.THREE), picker.one(Rank.KING)
     state = build_setup_state(
         picker,
@@ -235,9 +251,9 @@ def test_opener_is_chosen_from_hands_after_arranging_not_before(picker: DeckPick
         },
     )
     # Seat 1 keeps its cards; seat 0 buries its three face up, keeping the king.
-    ruleset.apply_move(state, arrangement(card.id for card in state.players[PlayerId(1)].face_up))
+    state.apply_move(arrangement(card.id for card in state.players[PlayerId(1)].face_up))
     hide = [low] + [card for card in state.players[PlayerId(0)].face_up][:2]
-    ruleset.apply_move(state, arrangement(card.id for card in hide))
+    state.apply_move(arrangement(card.id for card in hide))
 
     assert state.phase is Phase.PLAY
     assert low.id in {card.id for card in state.players[PlayerId(0)].face_up}
@@ -245,7 +261,7 @@ def test_opener_is_chosen_from_hands_after_arranging_not_before(picker: DeckPick
 
 
 def test_failed_postcondition_validation_rolls_the_whole_transition_back(
-    ruleset: Ruleset, monkeypatch: pytest.MonkeyPatch
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A postcondition failure leaves no half-applied arrangement behind.
 
@@ -253,7 +269,7 @@ def test_failed_postcondition_validation_rolls_the_whole_transition_back(
     is restored on the caller's own object rather than reported as an error over
     a mutated position.
     """
-    state = ruleset.create_initial_state(3, seed=36)
+    state = GameState.create(3, seed=36)
     before = deepcopy(state)
     identity = id(state)
 
@@ -268,9 +284,9 @@ def test_failed_postcondition_validation_rolls_the_whole_transition_back(
         """
         raise StateInvariantError("simulated postcondition failure")
 
-    monkeypatch.setattr("shed.engine.rules.validate_decision_boundary", explode)
+    monkeypatch.setattr("shed.engine.state.validate_decision_boundary", explode)
     with pytest.raises(StateInvariantError, match="simulated postcondition failure"):
-        ruleset.apply_move(state, state.get_legal_moves()[0])
+        state.apply_move(state.get_legal_moves()[0])
 
     assert id(state) == identity  # Restored in place, not rebound.
     assert state == before
@@ -279,62 +295,65 @@ def test_failed_postcondition_validation_rolls_the_whole_transition_back(
     assert state.current_player == before.current_player
 
 
-def test_setup_undo_restores_a_pending_submission(ruleset: Ruleset) -> None:
+def test_setup_undo_restores_a_pending_submission() -> None:
     """Undoing a stored arrangement removes it and restores the actor."""
-    state = ruleset.create_initial_state(3, seed=31)
+    state = GameState.create(3, seed=31)
     before = deepcopy(state)
-    transition = ruleset.apply_move(state, state.get_legal_moves()[2])
+    transition = state.apply_move(state.get_legal_moves()[2])
     assert state != before
 
-    ruleset.undo_move(state, transition)
+    state.undo_move(transition)
     assert state == before
     assert state.setup is not None
     assert state.setup.submissions == {}
 
 
-def test_setup_undo_restores_the_collective_commitment(ruleset: Ruleset) -> None:
+def test_setup_undo_restores_the_collective_commitment() -> None:
     """Undoing the final submission returns the game to SETUP, unarranged."""
-    state = ruleset.create_initial_state(2, seed=32)
-    ruleset.apply_move(state, state.get_legal_moves()[4])
+    state = GameState.create(2, seed=32)
+    state.apply_move(state.get_legal_moves()[4])
     before_commit = deepcopy(state)
-    transition = ruleset.apply_move(state, state.get_legal_moves()[9])
+    transition = state.apply_move(state.get_legal_moves()[9])
     assert state.phase is Phase.PLAY
 
-    ruleset.undo_move(state, transition)
+    state.undo_move(transition)
     assert state == before_commit
     assert state.phase is Phase.SETUP
     assert state.setup is not None
     assert len(state.setup.pending) == 1
 
 
-def test_undo_snapshots_survive_later_mutation(ruleset: Ruleset) -> None:
+def test_undo_snapshots_survive_later_mutation() -> None:
     """An undo record stays usable after the state is mutated again."""
-    state = ruleset.create_initial_state(2, seed=33)
+    state = GameState.create(2, seed=33)
     before = deepcopy(state)
-    transition = ruleset.apply_move(state, state.get_legal_moves()[1])
+    transition = state.apply_move(state.get_legal_moves()[1])
 
-    ruleset.undo_move(state, transition)
+    state.undo_move(transition)
     state.players[PlayerId(0)].hand.clear()
     state.draw_pile.clear()
-    ruleset.undo_move(state, transition)
+    state.undo_move(transition)
     assert state == before
 
 
-def test_undo_rewinds_the_caller_s_own_state_object(ruleset: Ruleset) -> None:
+def test_undo_rewinds_the_caller_s_own_state_object() -> None:
     """Undo restores fields in place; holders of the reference see the rewind."""
-    state = ruleset.create_initial_state(2, seed=34)
+    state = GameState.create(2, seed=34)
     alias = state
-    transition = ruleset.apply_move(state, state.get_legal_moves()[0])
-    ruleset.undo_move(state, transition)
+    identity = id(state)
+    transition = state.apply_move(state.get_legal_moves()[0])
+    state.undo_move(transition)
+    assert id(state) == identity
+    assert alias is state
     assert alias.setup is not None
     assert alias.setup.submissions == {}
     assert alias.phase is Phase.SETUP
 
 
-def test_setup_decisions_do_not_advance_the_play_counter(ruleset: Ruleset) -> None:
+def test_setup_decisions_do_not_advance_the_play_counter() -> None:
     """``current_ply`` counts resolved PLAY decisions only."""
-    state = ruleset.create_initial_state(5, seed=35)
+    state = GameState.create(5, seed=35)
     while state.phase is Phase.SETUP:
         assert state.current_ply == 0
-        ruleset.apply_move(state, state.get_legal_moves()[0])
+        state.apply_move(state.get_legal_moves()[0])
     assert state.current_ply == 0

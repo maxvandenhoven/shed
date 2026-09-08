@@ -13,7 +13,7 @@ The engine is being built in milestones. What exists today:
 | --- | --- |
 | Cards, moves, constraints, fixed `shed-v1` profile | Implemented |
 | Canonical 54-card deck, deterministic shuffle and deal | Implemented |
-| `GameState`, `PlayerView`, and the information boundary | Implemented |
+| `GameState` operations, `PlayerView`, and the information boundary | Implemented |
 | Events, private-event filtering, transition/undo shape | Implemented |
 | Legal-move generation for setup, hand, face-up, face-down, forced pickup | Implemented |
 | SETUP transition: private submissions, collective commit, opener choice | Implemented |
@@ -26,19 +26,22 @@ enforces the annotations. Validating untyped external data and building these
 objects from it is the job of the future replay and transport layers, so the
 engine stays free of JSON and decoding.
 
-`Ruleset.apply_move()` therefore resolves arrangements only. A legal PLAY move
+`GameState.apply_move()` resolves arrangements only. A legal PLAY move
 is validated and then refused with `NotImplementedError`: the engine never
 reports a transition that did not happen. Everything else about a PLAY position
-already works, so legality can be inspected on crafted states:
+already works, so legality can be inspected on crafted states.
+
+`GameState` is the entry point — it carries its own `RulesConfig`, so there is
+no separate rules object:
 
 ```python
-from shed.engine import PlayerId, Ruleset
+from shed.engine import GameState, PlayerId
 
-ruleset = Ruleset()
-state = ruleset.create_initial_state(3, seed=42)  # SETUP, arrangements pending
-view = ruleset.observe(state, PlayerId(1))  # immutable, hides everything private
-moves = view.get_legal_moves()  # the 20 arrangements
-ruleset.apply_move(state, moves[0])  # stored privately until all players choose
+state = GameState.create(3, seed=42)  # SETUP, arrangements pending
+moves = state.get_legal_moves()  # the actor's 20 arrangements
+view = state.observe(PlayerId(1))  # immutable; hides everything private
+view.legal_moves  # the same tuple, for the actor only
+state.apply_move(moves[0])  # stored privately until all players choose
 ```
 
 ## Requirements
@@ -71,7 +74,7 @@ The review gates are the same commands with `ruff format --check .` in place of
 | Path | Contents |
 | --- | --- |
 | `src/shed/` | The `shed` package |
-| `src/shed/engine/` | Types, state and views, events, rules and `Ruleset` |
+| `src/shed/engine/` | Value types, events, and state with the game operations |
 | `tests/` | pytest suite |
 | `scripts/` | Command-line entry points (none yet) |
 | `docs/implementation.md` | Implementation specification |

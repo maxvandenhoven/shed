@@ -37,11 +37,13 @@ __all__ = [
     "CardId",
     "IllegalMoveError",
     "Move",
+    "Outcome",
     "Phase",
     "PickUp",
     "Play",
     "PlayConstraint",
     "PlayerId",
+    "PublicPlayerState",
     "Rank",
     "Reveal",
     "RulesConfig",
@@ -175,6 +177,38 @@ class Card:
             raise ValueError("A joker has no suit")
         if self.rank is not Rank.JOKER and self.suit is None:
             raise ValueError("An ordinary card needs a suit")
+
+
+@dataclass(frozen=True, slots=True)
+class Outcome:
+    """Result of a finished game.
+
+    Attributes:
+        winner: The first player to empty every personal zone.
+    """
+
+    winner: PlayerId
+
+
+@dataclass(frozen=True, slots=True)
+class PublicPlayerState:
+    """What everybody knows about one player.
+
+    Shared by observations and by the events that announce a deal, so it lives
+    with the other value types rather than in either consumer.
+
+    Attributes:
+        player: The described seat.
+        hand_count: Number of cards in hand; identities stay private.
+        face_up: Public face-up cards, sorted by card ID.
+        face_down_slots: Remaining face-down slot IDs ascending; identities are
+            never included.
+    """
+
+    player: PlayerId
+    hand_count: int
+    face_up: tuple[Card, ...]
+    face_down_slots: tuple[SlotId, ...]
 
 
 @dataclass(frozen=True, slots=True)

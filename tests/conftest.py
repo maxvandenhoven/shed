@@ -23,7 +23,6 @@ from shed.engine import (
     PlayerId,
     PlayerState,
     Rank,
-    Ruleset,
     SetupState,
     SlotId,
     Transition,
@@ -301,14 +300,13 @@ def arranges_in(moves: Sequence[Move]) -> tuple[Arrange, ...]:
     return tuple(move for move in moves if isinstance(move, Arrange))
 
 
-def commit_unchanged(ruleset: Ruleset, state: GameState) -> list[Transition]:
+def commit_unchanged(state: GameState) -> list[Transition]:
     """Have every pending player keep the arrangement they were dealt.
 
     Keeping the original arrangement is legal, so this is the shortest route
     from a crafted SETUP state to the opening PLAY position.
 
     Args:
-        ruleset: Ruleset applying the moves.
         state: A SETUP state; mutated in place until it enters PLAY.
 
     Returns:
@@ -319,7 +317,7 @@ def commit_unchanged(ruleset: Ruleset, state: GameState) -> list[Transition]:
         actor = state.current_player
         assert actor is not None
         keep = arrangement(card.id for card in state.players[actor].face_up)
-        transitions.append(ruleset.apply_move(state, keep))
+        transitions.append(state.apply_move(keep))
     return transitions
 
 
@@ -327,9 +325,3 @@ def commit_unchanged(ruleset: Ruleset, state: GameState) -> list[Transition]:
 def picker() -> DeckPicker:
     """Provide a fresh canonical-deck picker for one test."""
     return DeckPicker()
-
-
-@pytest.fixture
-def ruleset() -> Ruleset:
-    """Provide a ruleset running the fixed ``shed-v1`` profile."""
-    return Ruleset()

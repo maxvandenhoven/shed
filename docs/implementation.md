@@ -31,10 +31,9 @@ Monte Carlo search, belief sampling, persistent workers, parallel gauntlets, con
 
 | Piece | Owns | Main consumer |
 | --- | --- | --- |
-| `GameState` | All physical cards, hidden assignments, deck order, phase, actor | `Ruleset` and trusted simulations |
-| `PlayerView` | Immutable information available to one player | Agents |
-| `Move` | One decision: arrange, play, reveal, or pick up | Ruleset and runner |
-| `Ruleset` | Initialization, observation, legality, resolution, undo, outcome | Runner, agents' hypothetical simulations |
+| `GameState` | All physical cards, hidden assignments, deck order, phase, actor; creation, observation, legality, resolution, undo, outcome | Runner, trusted simulations |
+| `PlayerView` | Immutable information available to one player, including its legal moves | Agents |
+| `Move` | One decision: arrange, play, reveal, or pick up | `GameState` and runner |
 | `Agent` | Strategy; submits candidate decisions | Runner's worker process |
 | `TurnContext` | Agent-facing submission channel and remaining-time query | Agent |
 | `MatchRunner` | Timing, worker lifecycle, selection, fallbacks, history, replay | Scripts and gauntlet |
@@ -43,6 +42,8 @@ Monte Carlo search, belief sampling, persistent workers, parallel gauntlets, con
 Flow: gauntlet schedules a match → runner builds a player view → agent submits candidates → runner selects one → engine resolves it → repeat → gauntlet records results.
 
 Dependencies point inward: engine depends only on the standard library; agents depend on engine types; match runner depends on both; gauntlet depends on match runner. Engine code never imports agents, timing, scripts, or multiprocessing.
+
+Inside the engine the direction is `types` → `events` → `state`: `types.py` defines the value types, moves, configuration, and errors; `events.py` records what happened using them; `state.py` builds state, observations, and the game operations on both. Engine modules import from the defining module, not from the re-exporting `shed/engine/__init__.py`. There is no separate rules object: `GameState` already carries its `RulesConfig`, so a second instance holding the same fixed profile would only add ceremony.
 
 ## 3. Rules and selected interpretation
 
@@ -125,9 +126,8 @@ Use a normal `src` layout with one namespace package root, `shed`. Avoid separat
 | `docs/implementation.md` | This specification |
 | `src/shed/__init__.py` | Package metadata; minimal exports |
 | `src/shed/engine/__init__.py` | Intentional public engine exports |
-| `src/shed/engine/types.py` | IDs, cards, enums, constraints, moves, fixed rules config |
-| `src/shed/engine/state.py` | Mutable state, immutable observations, derived active zone |
-| `src/shed/engine/rules.py` | Shared legality functions and `Ruleset` orchestration |
+| `src/shed/engine/types.py` | IDs, cards, enums, constraints, moves, shared value records, fixed rules config, errors |
+| `src/shed/engine/state.py` | Mutable state and its operations, immutable observations, derived active zone, legality |
 | `src/shed/engine/events.py` | Event and transition/undo types |
 | `src/shed/agents/__init__.py` | Public agent exports |
 | `src/shed/agents/base.py` | Agent ABC, turn protocol, serializable `AgentSpec`, built-in factory |
@@ -314,7 +314,7 @@ class GameState:
     setup: SetupState | None
     outcome: Outcome | None
 
-    def get_legal_moves(self) -> tuple[Move, ...]: ...
+    # Creation, legality, observation, resolution, and undo; see section 7.
 
 
 @dataclass(frozen=True, slots=True)
@@ -342,11 +342,10 @@ class PlayerView:
     constraint: PlayConstraint
     outcome: Outcome | None
     history: tuple[ObservedEvent, ...]
+    legal_moves: tuple[Move, ...]
 
     @property
     def me(self) -> PublicPlayerState: ...
-
-    def get_legal_moves(self) -> tuple[Move, ...]: ...
 ```
 
 `current_ply` counts only resolved PLAY decisions, including pickup and failed reveal. It increments exactly once per such decision. Setup decisions do not increment it. The runner separately numbers **all** decisions, including setup and extra turns.
@@ -359,7 +358,9 @@ class PlayerView:
 
 An observation contains public cards and the viewer's current hand. History preserves previously known information even after a card changes zones. Agent policy must depend only on the view, public rules, its configuration, and its independent random seed.
 
-`observe()` is read-only. It must not resolve a refill or mutate the game. Invalid decision-boundary states raise an invariant error; automatic work belongs inside initialization or `apply_move()`.
+`observe()` is read-only. It must not resolve a refill or mutate the game. Invalid decision-boundary states raise an invariant error; automatic work belongs inside creation or `apply_move()`. Generating the actor's moves is what performs that check, so an unresolved position is refused whoever asks to observe it.
+
+`Outcome` and `PublicPlayerState` are shared value records: both events and observations use them, so they live in `types.py` and keep the module dependencies one-way.
 
 ### History and events
 
@@ -383,50 +384,50 @@ Initial public events matter: they let agents remember cards visible before arra
 
 For the first release, copying a tuple of filtered history per real decision is acceptable. Do not construct or copy complete history at every simulated search node.
 
-## 7. Ruleset API and legal moves
+## 7. Game operations and legal moves
 
-Use one concrete `Ruleset`, with small internal helpers. Separate classes for setup, effects, termination, or individual cards are unnecessary initially.
+`GameState` is the engine's entry point. It already stores its `RulesConfig`, so the operations live on it directly rather than on a second rules object; small private helpers keep the methods readable.
 
 ```python
-class Ruleset:
-    def __init__(self, config: RulesConfig = RulesConfig()) -> None: ...
-
-    def create_initial_state(
-        self,
+class GameState:
+    @classmethod
+    def create(
+        cls,
         player_count: int,
         *,
         seed: int,
-        dealer: PlayerId = PlayerId(0),
+        dealer: PlayerId = DEFAULT_DEALER,
+        rules: RulesConfig = DEFAULT_RULES,
     ) -> GameState: ...
 
-    def initial_events(self, state: GameState) -> tuple[ObservedEvent, ...]: ...
+    @property
+    def is_finished(self) -> bool: ...
+
+    def get_legal_moves(self) -> tuple[Move, ...]: ...
 
     def observe(
         self,
-        state: GameState,
         player: PlayerId,
         *,
         history: tuple[ObservedEvent, ...] = (),
     ) -> PlayerView: ...
 
-    def get_legal_moves(self, view: PlayerView) -> tuple[Move, ...]: ...
+    def initial_events(self) -> tuple[ObservedEvent, ...]: ...
 
-    def apply_move(self, state: GameState, move: Move) -> Transition: ...
+    def apply_move(self, move: Move) -> Transition: ...
 
-    def undo_move(self, state: GameState, transition: Transition) -> None: ...
-
-    def get_outcome(self, state: GameState) -> Outcome | None: ...
-
-    def is_finished(self, state: GameState) -> bool: ...
+    def undo_move(self, transition: Transition) -> None: ...
 ```
 
-Use a single pure legality implementation in `engine/rules.py`, such as `legal_moves(view)`. `PlayerView.get_legal_moves()` and `Ruleset.get_legal_moves(view)` delegate to it. `GameState.get_legal_moves()` builds the actor's view without history and delegates. Local imports inside convenience wrappers are acceptable to avoid import cycles. These are conveniences around one implementation, not three independent rule engines.
+`state.outcome` is the outcome accessor, and `is_finished` is a read-only property derived from the phase; neither is stored twice. `deal_initial_state(deck, ...)` remains a module-level helper so a replay can rebuild the opening position from a recorded deck order; `create` is the seeded path to the same function.
 
-Do not embed an independently cached `legal_moves` field in `PlayerView`; this resolves the earlier alternative sketches. The runner precomputes the tuple once per decision. `TurnContext.legal_moves` can expose that tuple to avoid repeated work in agents.
+`get_legal_moves()` is the single legality implementation. It reads the actor's own cards, the public constraint, and the size of the draw pile straight from the state, and builds no observation: the dependency runs one way, from `observe()` to `get_legal_moves()`. This supersedes the earlier sketch in which the generator took a `PlayerView` and three wrappers delegated to it.
+
+`PlayerView` carries a `legal_moves: tuple[Move, ...]` field, populated by `observe()` with the actor's moves and left empty for every other viewer; agents read it directly rather than calling a method. This supersedes the earlier instruction to keep legal moves off the view. The field describes the state that was observed, and is not authority to mutate a later one: `apply_move()` always revalidates against the current position, so a stale tuple can only produce an `IllegalMoveError`. `TurnContext.legal_moves` can expose the runner's per-decision tuple to avoid repeated work in agents.
 
 ### Generation algorithm
 
-1. Return `()` for FINISHED or when `viewer != current_player`.
+1. Return `()` for FINISHED. A live phase with no scheduled actor is an invariant error, and so is any other invalid live decision boundary: a pending refill, or an actor holding no cards at all. A view for a non-actor carries `()` because `observe()` gives it none, not because the generator was asked about them.
 2. In SETUP, return all three-card combinations from the actor's six hand/face-up cards, with sorted IDs and deterministic combination order. This yields 20 arrangements.
 3. In PLAY derive the active zone using section 3.3.
 4. For FACE_DOWN return `Reveal(slot)` for each remaining slot ascending. Never inspect or filter by hidden rank.
@@ -625,7 +626,7 @@ There is no application-level cap on the number of submissions. Transport has fi
 
 ### 10.2 Minimal process model
 
-Use one newly spawned process per decision. It receives only `AgentSpec`, a fresh independent agent seed, `PlayerView`, legal moves, its deadline, and a dedicated send endpoint. Instantiate the agent in the worker. Do not pass live agents, `GameState`, `Ruleset` instances holding private data, match results, or replay seeds.
+Use one newly spawned process per decision. It receives only `AgentSpec`, a fresh independent agent seed, `PlayerView`, legal moves, its deadline, and a dedicated send endpoint. Instantiate the agent in the worker. Do not pass live agents, `GameState`, match results, or replay seeds.
 
 This corrects a limitation of the earlier example: repeatedly spawning a copy of a live random agent can repeatedly reset the same RNG state. Construct a fresh agent with a fresh recorded seed instead.
 
@@ -652,7 +653,7 @@ Python's process, pipe, serialization, and cleanup behavior is documented in the
 Implement this as a small runner helper; the selection policy should also be testable independently with an injected clock.
 
 ```text
-legal_moves = view.get_legal_moves()
+legal_moves = state.get_legal_moves()
 assert legal_moves is nonempty
 latest = None
 deadline = monotonic() + budget
@@ -706,7 +707,6 @@ class MatchConfig:
 class MatchRunner:
     def __init__(
         self,
-        ruleset: Ruleset,
         agents: dict[PlayerId, AgentSpec],
         config: MatchConfig,
     ) -> None: ...
@@ -721,7 +721,7 @@ class MatchRunner:
     ) -> MatchResult: ...
 ```
 
-Validate that agent seats are exactly `0..len(agents)-1` before the match. `run()` creates the fresh state through `create_initial_state(len(agents), seed=deal_seed, dealer=dealer)` and records the initialization metadata. Use a shared deterministic shuffle/deal helper to retain or reconstruct the initial shuffled deck order from that seed for replay. Initialize filtered histories from `initial_events(state)`. This slightly tightens the earlier `run(state)` sketch so replay initialization is always available. Loading a partially played state without its history is not supported.
+Validate that agent seats are exactly `0..len(agents)-1` before the match. `run()` creates the fresh state through `GameState.create(len(agents), seed=deal_seed, dealer=dealer)` and records the initialization metadata. Use a shared deterministic shuffle/deal helper to retain or reconstruct the initial shuffled deck order from that seed for replay. Initialize filtered histories from `state.initial_events()`. This slightly tightens the earlier `run(state)` sketch so replay initialization is always available. Loading a partially played state without its history is not supported.
 
 At each decision: check action limit; build actor view with filtered history; select a move; enforce strict-failure policy if enabled; apply it once; append full events and the turn record; update all filtered histories. Return when rules finish, failure aborts, or action limit truncates. The runner's terminal status is separate from `GameState.phase`: truncation must not fabricate an `Outcome`.
 
@@ -990,7 +990,8 @@ The work is complete when project files were scaffolded with the appropriate too
 | Three separately packaged engine/agents/arena projects | One `src/shed` package, engine and agents subpackages, small top-level runner modules |
 | Physical-card subsets for every play | Rank/count play actions; physical IDs retained for setup/replay |
 | Full state passed to agents | Immutable player-specific view only |
-| Cached legal moves in PlayerView vs method | Shared pure generator, view/state convenience methods, runner-local precomputation |
+| Cached legal moves in PlayerView vs method | One generator on `GameState`; `observe()` fills the view's `legal_moves` field; runner-local precomputation |
+| Separate `Ruleset` object beside `GameState` | Operations on `GameState`, which already carries the fixed profile |
 | `choose_move(view) -> Move` | `think(view, turn) -> None` with repeated submissions |
 | Separate final method / acceptance boolean | `submit(move, final=True) -> None`, no acknowledgements |
 | Agent return waits until deadline | Return closes early with latest candidate or fallback |

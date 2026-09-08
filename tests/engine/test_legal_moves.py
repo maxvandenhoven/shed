@@ -22,13 +22,11 @@ from shed.engine import (
     PlayerId,
     Rank,
     Reveal,
-    Ruleset,
     SlotId,
     StateInvariantError,
     Unrestricted,
     Zone,
     can_play_rank,
-    legal_moves,
 )
 from tests.conftest import UNRESTRICTED, DeckPicker, build_play_state, plays_in
 
@@ -92,12 +90,10 @@ def test_joker_strength_never_comes_from_its_enum_value() -> None:
     assert can_play_rank(Rank.ACE, AtMost(Rank.THREE)) is False
 
 
-def test_every_batch_count_of_a_playable_rank_is_offered(
-    ruleset: Ruleset, picker: DeckPicker
-) -> None:
+def test_every_batch_count_of_a_playable_rank_is_offered(picker: DeckPicker) -> None:
     """A rank held n times yields exactly n rank/count actions."""
     state = _solo_state(picker, picker.take(Rank.FIVE, 3) + picker.take(Rank.KING, 1))
-    moves = ruleset.get_legal_moves(ruleset.observe(state, PlayerId(0)))
+    moves = state.observe(PlayerId(0)).legal_moves
     assert moves == (
         Play(Zone.HAND, Rank.FIVE, 1),
         Play(Zone.HAND, Rank.FIVE, 2),
@@ -106,11 +102,11 @@ def test_every_batch_count_of_a_playable_rank_is_offered(
     )
 
 
-def test_moves_are_ordered_by_rank_then_count(ruleset: Ruleset, picker: DeckPicker) -> None:
+def test_moves_are_ordered_by_rank_then_count(picker: DeckPicker) -> None:
     """Generation order is deterministic and independent of card order."""
     hand = picker.take(Rank.ACE, 2) + picker.take(Rank.THREE, 2) + picker.take(Rank.TEN, 1)
     state = _solo_state(picker, hand)
-    moves = ruleset.observe(state, PlayerId(0)).get_legal_moves()
+    moves = state.observe(PlayerId(0)).legal_moves
     assert [(move.rank, move.count) for move in plays_in(moves)] == [
         (Rank.THREE, 1),
         (Rank.THREE, 2),
@@ -122,9 +118,7 @@ def test_moves_are_ordered_by_rank_then_count(ruleset: Ruleset, picker: DeckPick
     assert state.get_legal_moves() == moves
 
 
-def test_illegal_ranks_are_filtered_but_specials_survive(
-    ruleset: Ruleset, picker: DeckPicker
-) -> None:
+def test_illegal_ranks_are_filtered_but_specials_survive(picker: DeckPicker) -> None:
     """Under ``AtMost(SEVEN)`` an eight is illegal while the specials remain."""
     hand = picker.many([Rank.EIGHT, Rank.SIX, Rank.TWO, Rank.NINE, Rank.TEN, Rank.JOKER])
     state = _solo_state(picker, hand, constraint=AtMost(Rank.SEVEN))
@@ -132,9 +126,7 @@ def test_illegal_ranks_are_filtered_but_specials_survive(
     assert ranks == {Rank.SIX, Rank.TWO, Rank.NINE, Rank.TEN, Rank.JOKER}
 
 
-def test_at_least_constraint_accepts_equal_and_higher_ranks(
-    ruleset: Ruleset, picker: DeckPicker
-) -> None:
+def test_at_least_constraint_accepts_equal_and_higher_ranks(picker: DeckPicker) -> None:
     """``AtLeast(TEN)`` accepts ten and above and rejects lower ordinary ranks."""
     hand = picker.many([Rank.NINE, Rank.EIGHT, Rank.TEN, Rank.JACK])
     state = _solo_state(picker, hand, constraint=AtLeast(Rank.TEN))
@@ -142,15 +134,13 @@ def test_at_least_constraint_accepts_equal_and_higher_ranks(
     assert ranks == {Rank.NINE, Rank.TEN, Rank.JACK}  # The nine is a special, not a comparison.
 
 
-def test_blocked_hand_forces_pickup(ruleset: Ruleset, picker: DeckPicker) -> None:
+def test_blocked_hand_forces_pickup(picker: DeckPicker) -> None:
     """With nothing playable, picking up is the only legal action."""
     state = _solo_state(picker, picker.take(Rank.EIGHT, 3), constraint=AtMost(Rank.SEVEN))
     assert state.get_legal_moves() == (PickUp(),)
 
 
-def test_pickup_is_never_offered_beside_a_playable_batch(
-    ruleset: Ruleset, picker: DeckPicker
-) -> None:
+def test_pickup_is_never_offered_beside_a_playable_batch(picker: DeckPicker) -> None:
     """Voluntary pickup does not exist in this profile."""
     state = _solo_state(
         picker, picker.take(Rank.EIGHT, 2) + picker.take(Rank.TWO, 1), constraint=AtMost(Rank.SEVEN)
@@ -160,7 +150,7 @@ def test_pickup_is_never_offered_beside_a_playable_batch(
     assert moves == (Play(Zone.HAND, Rank.TWO, 1),)
 
 
-def test_hand_is_played_before_the_table(ruleset: Ruleset, picker: DeckPicker) -> None:
+def test_hand_is_played_before_the_table(picker: DeckPicker) -> None:
     """A non-empty hand is the only active zone, even with face-up cards left."""
     state = build_play_state(
         picker,
@@ -171,9 +161,7 @@ def test_hand_is_played_before_the_table(ruleset: Ruleset, picker: DeckPicker) -
     assert state.get_legal_moves() == (Play(Zone.HAND, Rank.FOUR, 1),)
 
 
-def test_face_up_is_active_only_once_hand_and_deck_are_empty(
-    ruleset: Ruleset, picker: DeckPicker
-) -> None:
+def test_face_up_is_active_only_once_hand_and_deck_are_empty(picker: DeckPicker) -> None:
     """The face-up collection becomes playable after the deck runs out."""
     state = build_play_state(
         picker,
@@ -188,9 +176,7 @@ def test_face_up_is_active_only_once_hand_and_deck_are_empty(
     )
 
 
-def test_an_empty_hand_beside_a_stocked_deck_is_an_invariant_error(
-    ruleset: Ruleset, picker: DeckPicker
-) -> None:
+def test_an_empty_hand_beside_a_stocked_deck_is_an_invariant_error(picker: DeckPicker) -> None:
     """The engine must refill before a decision is requested, not improvise."""
     state = build_play_state(
         picker,
@@ -202,7 +188,7 @@ def test_an_empty_hand_beside_a_stocked_deck_is_an_invariant_error(
         state.get_legal_moves()
 
 
-def test_every_remaining_face_down_slot_is_offered(ruleset: Ruleset, picker: DeckPicker) -> None:
+def test_every_remaining_face_down_slot_is_offered(picker: DeckPicker) -> None:
     """Blind play offers each remaining slot ascending, and only those."""
     blind = {SlotId(0): picker.one(Rank.THREE), SlotId(2): picker.one(Rank.ACE)}
     state = build_play_state(
@@ -213,7 +199,7 @@ def test_every_remaining_face_down_slot_is_offered(ruleset: Ruleset, picker: Dec
     assert state.get_legal_moves() == (Reveal(SlotId(0)), Reveal(SlotId(2)))
 
 
-def test_face_down_moves_never_leak_the_hidden_ranks(ruleset: Ruleset, picker: DeckPicker) -> None:
+def test_face_down_moves_never_leak_the_hidden_ranks(picker: DeckPicker) -> None:
     """Unplayable blind cards are still offered; the rank is not consulted."""
     blind = {
         SlotId(0): picker.one(Rank.ACE),
@@ -235,9 +221,7 @@ def test_face_down_moves_never_leak_the_hidden_ranks(ruleset: Ruleset, picker: D
     assert swapped.get_legal_moves() == offered
 
 
-def test_an_exhausted_actor_is_not_a_decision_boundary(
-    ruleset: Ruleset, picker: DeckPicker
-) -> None:
+def test_an_exhausted_actor_is_not_a_decision_boundary(picker: DeckPicker) -> None:
     """An actor with no cards means termination was never resolved.
 
     Empty legal moves stay correct for a finished game or a non-acting viewer,
@@ -251,24 +235,24 @@ def test_an_exhausted_actor_is_not_a_decision_boundary(
     state = build_play_state(picker, hands=exhausted, validate=False)
     before = deepcopy(state)
     with pytest.raises(StateInvariantError, match="holds no cards"):
-        ruleset.observe(state, PlayerId(0))
+        state.observe(PlayerId(0))
     with pytest.raises(StateInvariantError, match="holds no cards"):
         state.get_legal_moves()
     assert state == before  # The rejected observation mutated nothing.
 
 
-def test_only_the_current_actor_receives_moves(ruleset: Ruleset, picker: DeckPicker) -> None:
+def test_only_the_current_actor_receives_moves(picker: DeckPicker) -> None:
     """Views for other seats generate nothing, whatever those seats hold."""
     state = build_play_state(
         picker,
         hands={PlayerId(0): picker.take(Rank.FOUR, 1), PlayerId(1): picker.take(Rank.FIVE, 2)},
         current_player=PlayerId(0),
     )
-    assert ruleset.observe(state, PlayerId(1)).get_legal_moves() == ()
-    assert ruleset.observe(state, PlayerId(0)).get_legal_moves()
+    assert state.observe(PlayerId(1)).legal_moves == ()
+    assert state.observe(PlayerId(0)).legal_moves
 
 
-def test_a_finished_game_offers_no_moves(ruleset: Ruleset, picker: DeckPicker) -> None:
+def test_a_finished_game_offers_no_moves(picker: DeckPicker) -> None:
     """FINISHED states never produce decisions."""
     state = build_play_state(
         picker, hands={PlayerId(0): picker.take(Rank.FOUR, 1), PlayerId(1): []}
@@ -276,25 +260,64 @@ def test_a_finished_game_offers_no_moves(ruleset: Ruleset, picker: DeckPicker) -
     state.phase = Phase.FINISHED
     state.current_player = None
     state.outcome = Outcome(winner=PlayerId(1))
-    view = ruleset.observe(state, PlayerId(0))
-    assert legal_moves(view) == ()
     assert state.get_legal_moves() == ()
+    assert state.observe(PlayerId(0)).legal_moves == ()
 
 
-def test_all_three_entry_points_delegate_to_one_generator(
-    ruleset: Ruleset, picker: DeckPicker
+def test_legal_moves_need_no_observation(
+    picker: DeckPicker, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """State, view, and ruleset helpers return the same tuple."""
+    """Generation reads the state directly; it builds no view on the way.
+
+    The dependency runs one way -- ``observe`` calls ``get_legal_moves`` -- so
+    both are sabotaged here and generation must still succeed.
+    """
+
+    def unreachable(*args: object, **kwargs: object) -> None:
+        """Fail if legality generation tries to observe or build a view.
+
+        Args:
+            *args: Ignored.
+            **kwargs: Ignored.
+
+        Raises:
+            AssertionError: Always.
+        """
+        raise AssertionError("get_legal_moves must not construct an observation")
+
     state = build_play_state(
         picker,
         hands={PlayerId(0): picker.take(Rank.SIX, 2), PlayerId(1): []},
     )
-    view = ruleset.observe(state, PlayerId(0))
-    assert state.get_legal_moves() == view.get_legal_moves() == ruleset.get_legal_moves(view)
-    assert view.get_legal_moves() == legal_moves(view)
+    monkeypatch.setattr(GameState, "observe", unreachable)
+    monkeypatch.setattr("shed.engine.state.PlayerView", unreachable)
+
+    assert state.get_legal_moves() == (
+        Play(Zone.HAND, Rank.SIX, 1),
+        Play(Zone.HAND, Rank.SIX, 2),
+    )
 
 
-def test_generation_does_not_mutate_the_state(ruleset: Ruleset, picker: DeckPicker) -> None:
+def test_views_carry_the_actors_moves_and_nobody_elses(picker: DeckPicker) -> None:
+    """Each view holds exactly the state's legal moves, or none at all."""
+    state = build_play_state(
+        picker,
+        hands={
+            PlayerId(0): picker.take(Rank.SIX, 2),
+            PlayerId(1): picker.take(Rank.NINE, 1),
+            PlayerId(2): picker.take(Rank.ACE, 1),
+        },
+        current_player=PlayerId(1),
+    )
+    expected = state.get_legal_moves()
+    assert expected  # The actor always has a decision.
+
+    for seat in state.seat_order:
+        view = state.observe(seat)
+        assert view.legal_moves == (expected if seat == state.current_player else ())
+
+
+def test_generation_does_not_mutate_the_state(picker: DeckPicker) -> None:
     """Legal-move generation is pure with respect to the authoritative state."""
     state = build_play_state(
         picker,
@@ -305,9 +328,7 @@ def test_generation_does_not_mutate_the_state(ruleset: Ruleset, picker: DeckPick
     assert state == before
 
 
-def test_play_resolution_is_not_implemented_and_says_so(
-    ruleset: Ruleset, picker: DeckPicker
-) -> None:
+def test_play_resolution_is_not_implemented_and_says_so(picker: DeckPicker) -> None:
     """A legal play is refused explicitly rather than faking a transition."""
     state = build_play_state(
         picker,
@@ -316,13 +337,11 @@ def test_play_resolution_is_not_implemented_and_says_so(
     before = deepcopy(state)
     move = state.get_legal_moves()[0]
     with pytest.raises(NotImplementedError, match="PLAY resolution is not implemented"):
-        ruleset.apply_move(state, move)
+        state.apply_move(move)
     assert state == before
 
 
-def test_illegal_play_moves_are_rejected_before_the_unimplemented_path(
-    ruleset: Ruleset, picker: DeckPicker
-) -> None:
+def test_illegal_play_moves_are_rejected_before_the_unimplemented_path(picker: DeckPicker) -> None:
     """Validation still runs first: an illegal batch is an illegal move."""
     state = build_play_state(
         picker,
@@ -336,4 +355,4 @@ def test_illegal_play_moves_are_rejected_before_the_unimplemented_path(
         Reveal(SlotId(0)),
     ):
         with pytest.raises(IllegalMoveError):
-            ruleset.apply_move(state, move)
+            state.apply_move(move)

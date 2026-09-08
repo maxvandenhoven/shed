@@ -14,7 +14,6 @@ from shed.engine import (
     GameState,
     Phase,
     PlayerId,
-    Ruleset,
     Transition,
     Unrestricted,
     validate_decision_boundary,
@@ -23,11 +22,10 @@ from shed.engine import (
 SEEDS = range(12)
 
 
-def _play_out_setup(ruleset: Ruleset, state: GameState, rng: random.Random) -> list[Transition]:
+def _play_out_setup(state: GameState, rng: random.Random) -> list[Transition]:
     """Submit a random legal arrangement for every seat, checking invariants.
 
     Args:
-        ruleset: Ruleset applying the moves.
         state: A SETUP state, mutated until it enters PLAY.
         rng: Generator choosing among the legal arrangements.
 
@@ -39,7 +37,7 @@ def _play_out_setup(ruleset: Ruleset, state: GameState, rng: random.Random) -> l
         moves = state.get_legal_moves()
         assert len(moves) == 20
         assert all(isinstance(move, Arrange) for move in moves)
-        transitions.append(ruleset.apply_move(state, rng.choice(moves)))
+        transitions.append(state.apply_move(rng.choice(moves)))
         validate_decision_boundary(state)
     return transitions
 
@@ -47,12 +45,11 @@ def _play_out_setup(ruleset: Ruleset, state: GameState, rng: random.Random) -> l
 @pytest.mark.parametrize("player_count", [2, 3, 4, 5])
 def test_seeded_setups_conserve_cards_and_reach_a_legal_opening(player_count: int) -> None:
     """Every seeded deal arranges cleanly into a playable opening position."""
-    ruleset = Ruleset()
     rng = random.Random(player_count)
     for seed in SEEDS:
         dealer = PlayerId(seed % player_count)
-        state = ruleset.create_initial_state(player_count, seed=seed, dealer=dealer)
-        _play_out_setup(ruleset, state, rng)
+        state = GameState.create(player_count, seed=seed, dealer=dealer)
+        _play_out_setup(state, rng)
 
         assert state.phase is Phase.PLAY
         assert state.setup is None
@@ -72,15 +69,14 @@ def test_seeded_setups_conserve_cards_and_reach_a_legal_opening(player_count: in
 @pytest.mark.parametrize("player_count", [2, 3, 4, 5])
 def test_lifo_undo_returns_to_the_exact_dealt_position(player_count: int) -> None:
     """Undoing every setup decision restores the freshly dealt state."""
-    ruleset = Ruleset()
     rng = random.Random(100 + player_count)
     for seed in SEEDS:
-        state = ruleset.create_initial_state(player_count, seed=seed)
-        dealt = ruleset.create_initial_state(player_count, seed=seed)
-        transitions = _play_out_setup(ruleset, state, rng)
+        state = GameState.create(player_count, seed=seed)
+        dealt = GameState.create(player_count, seed=seed)
+        transitions = _play_out_setup(state, rng)
 
         for transition in reversed(transitions):
-            ruleset.undo_move(state, transition)
+            state.undo_move(transition)
         assert state == dealt
         validate_decision_boundary(state)
 
@@ -88,13 +84,12 @@ def test_lifo_undo_returns_to_the_exact_dealt_position(player_count: int) -> Non
 @pytest.mark.parametrize("player_count", [2, 3, 4, 5])
 def test_each_seat_observes_only_its_own_hand_throughout_setup(player_count: int) -> None:
     """No observation during setup ever names a card another player holds."""
-    ruleset = Ruleset()
     rng = random.Random(200 + player_count)
-    state = ruleset.create_initial_state(player_count, seed=7)
+    state = GameState.create(player_count, seed=7)
 
     while True:
         for seat in state.seat_order:
-            view = ruleset.observe(state, seat)
+            view = state.observe(seat)
             visible = {card.id for card in view.hand}
             visible |= {card.id for public in view.players for card in public.face_up}
             for other in state.seat_order:
@@ -105,4 +100,4 @@ def test_each_seat_observes_only_its_own_hand_throughout_setup(player_count: int
                 assert not visible & private
         if state.phase is not Phase.SETUP:
             break
-        ruleset.apply_move(state, rng.choice(state.get_legal_moves()))
+        state.apply_move(rng.choice(state.get_legal_moves()))

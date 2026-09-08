@@ -8,15 +8,31 @@ while keeping the counts everybody can see.
 
 History itself lives in the runner, outside ``GameState``: growing history must
 never enter an undo snapshot or a replay's state records.
+
+This module depends only on :mod:`shed.engine.types`. ``UndoRecord`` names
+``GameState`` in an annotation alone, under a ``TYPE_CHECKING`` import with
+postponed annotations, so ``state.py`` can import these records at runtime
+without a cycle.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from typing import TYPE_CHECKING
 
-from shed.engine.state import GameState, Outcome, PublicPlayerState
-from shed.engine.types import Card, Move, PlayerId, SlotId, Zone
+from shed.engine.types import (
+    Card,
+    Move,
+    Outcome,
+    PlayerId,
+    PublicPlayerState,
+    SlotId,
+    Zone,
+)
+
+if TYPE_CHECKING:  # Only UndoRecord names GameState, and only in an annotation.
+    from shed.engine.state import GameState
 
 __all__ = [
     "ArrangementCommitted",

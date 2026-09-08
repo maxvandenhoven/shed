@@ -2,12 +2,20 @@
 
 The engine owns cards, authoritative state, observations, legality, and
 transitions. It depends only on the standard library and never imports agents,
-timing, scripts, or multiprocessing.
+timing, scripts, or multiprocessing, nor any JSON, transport, or replay
+decoding.
+
+``GameState`` is the entry point: create a game with :meth:`GameState.create`,
+then use ``get_legal_moves``, ``observe``, ``initial_events``, ``apply_move``,
+and ``undo_move`` on it. Modules depend one way -- ``types`` defines the value
+types, ``events`` records what happened with them, and ``state`` builds the
+game on both -- and engine code imports from those modules directly rather than
+through this file.
 
 Milestone status: the deck, deterministic dealing, state and player views, the
 event vocabulary, legal-move generation, and the SETUP transition are
 implemented. Ordinary PLAY resolution is the remaining engine work, and
-``Ruleset.apply_move`` refuses PLAY decisions with ``NotImplementedError``
+``GameState.apply_move`` refuses PLAY decisions with ``NotImplementedError``
 rather than reporting a transition that did not happen.
 """
 
@@ -29,25 +37,14 @@ from shed.engine.events import (
     filter_event_for,
     filter_events_for,
 )
-from shed.engine.rules import (
-    OPENING_RANK_ORDER,
-    Ruleset,
-    can_play_rank,
-    legal_moves,
-    select_opening_player,
-)
 from shed.engine.state import (
     GameState,
-    Outcome,
     PlayerState,
     PlayerView,
-    PublicPlayerState,
     SetupState,
-    build_view,
+    can_play_rank,
     deal_initial_state,
     dealing_order,
-    derive_active_zone,
-    public_player_state,
     shuffled_deck,
     validate_decision_boundary,
 )
@@ -63,11 +60,13 @@ from shed.engine.types import (
     CardId,
     IllegalMoveError,
     Move,
+    Outcome,
     Phase,
     PickUp,
     Play,
     PlayConstraint,
     PlayerId,
+    PublicPlayerState,
     Rank,
     Reveal,
     RulesConfig,
@@ -82,7 +81,6 @@ from shed.engine.types import (
 __all__ = [
     "DEFAULT_DEALER",
     "DEFAULT_RULES",
-    "OPENING_RANK_ORDER",
     "ORDINARY_RANKS",
     "SUIT_ORDER",
     "Arrange",
@@ -117,7 +115,6 @@ __all__ = [
     "Rank",
     "Reveal",
     "RulesConfig",
-    "Ruleset",
     "SetupState",
     "SlotId",
     "StateInvariantError",
@@ -127,16 +124,11 @@ __all__ = [
     "Unrestricted",
     "Zone",
     "build_deck",
-    "build_view",
     "can_play_rank",
     "deal_initial_state",
     "dealing_order",
-    "derive_active_zone",
     "filter_event_for",
     "filter_events_for",
-    "legal_moves",
-    "public_player_state",
-    "select_opening_player",
     "shuffled_deck",
     "validate_decision_boundary",
 ]
