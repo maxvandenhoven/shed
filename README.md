@@ -4,9 +4,36 @@ An engine, interchangeable agents, and an evaluation gauntlet for **Shed**, a
 hidden-information card game for 2–5 players.
 
 The full design contract lives in [`docs/implementation.md`](docs/implementation.md).
-This repository currently contains the project scaffold and development
-workflow only: the game rules, agents, match runner, replay format, and
-gauntlet described in that document are **not implemented yet**.
+
+## Status
+
+The engine is being built in milestones. What exists today:
+
+| Area | State |
+| --- | --- |
+| Cards, moves, constraints, fixed `shed-v1` profile | Implemented |
+| Canonical 54-card deck, deterministic shuffle and deal | Implemented |
+| `GameState`, `PlayerView`, and the information boundary | Implemented |
+| Events, private-event filtering, transition/undo shape | Implemented |
+| Legal-move generation for setup, hand, face-up, face-down, forced pickup | Implemented |
+| SETUP transition: private submissions, collective commit, opener choice | Implemented |
+| **Ordinary PLAY resolution** — batch transfer, reveals, burns, pickup, refill, termination | **Remaining engine work** |
+| Agents, match runner, replay format, gauntlet, scripts | Not started |
+
+`Ruleset.apply_move()` therefore resolves arrangements only. A legal PLAY move
+is validated and then refused with `NotImplementedError`: the engine never
+reports a transition that did not happen. Everything else about a PLAY position
+already works, so legality can be inspected on crafted states:
+
+```python
+from shed.engine import PlayerId, Ruleset
+
+ruleset = Ruleset()
+state = ruleset.create_initial_state(3, seed=42)  # SETUP, arrangements pending
+view = ruleset.observe(state, PlayerId(1))  # immutable, hides everything private
+moves = view.get_legal_moves()  # the 20 arrangements
+ruleset.apply_move(state, moves[0])  # stored privately until all players choose
+```
 
 ## Requirements
 
@@ -37,7 +64,8 @@ The review gates are the same commands with `ruff format --check .` in place of
 
 | Path | Contents |
 | --- | --- |
-| `src/shed/` | The `shed` package (currently project metadata only) |
+| `src/shed/` | The `shed` package |
+| `src/shed/engine/` | Types, state and views, events, rules and `Ruleset` |
 | `tests/` | pytest suite |
 | `scripts/` | Command-line entry points (none yet) |
 | `docs/implementation.md` | Implementation specification |
