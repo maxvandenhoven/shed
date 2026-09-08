@@ -6,9 +6,19 @@ frozen rules configuration, and the engine's two error types. Everything here is
 immutable, hashable, and holds no game state, so any other module may import it
 without creating a cycle.
 
-Moves canonicalize themselves on construction. Equivalent decoded submissions
-therefore compare equal, which is what lets the ruleset validate a move by
-membership in the generated legal-move tuple.
+Every constructor here takes correctly typed domain objects and assumes its
+annotations hold: ``Play`` takes a ``Rank``, never an integer it converts.
+``__post_init__`` checks domain invariants only -- non-negative identifiers,
+positive counts, playable sources, distinct arrangement IDs, joker/suit
+consistency -- and never coerces or type-checks its inputs. ``ty`` enforces the
+annotations for engine callers; untyped external data belongs to the future
+replay and transport layers, which validate it where it is decoded and construct
+these objects before calling the engine.
+
+Moves still canonicalize their *values*: an arrangement sorts its identifiers, so
+two submissions naming the same physical cards compare equal. That is semantic
+canonicalization, not input conversion, and it is what lets the ruleset validate
+a move by membership in the generated legal-move tuple.
 """
 
 from dataclasses import dataclass, fields
@@ -120,63 +130,22 @@ ORDINARY_RANKS: tuple[Rank, ...] = tuple(rank for rank in Rank if rank is not Ra
 """Ordinary ranks ascending, two through ace; jokers are excluded."""
 
 
-def _require_int(value: object, name: str) -> int:
-    """Return ``value`` as an ``int``, rejecting booleans and other types.
+def _reject_joker_bound(rank: Rank, name: str) -> None:
+    """Refuse a joker as a rank comparison bound.
 
-    Decoded JSON and agent submissions can contain ``True``/``False`` where an
-    integer is expected; ``bool`` is a subclass of ``int``, so it must be
-    rejected explicitly rather than silently accepted as ``0``/``1``.
-
-    Args:
-        value: Candidate value taken from a move, card, or decoded payload.
-        name: Field name used in the error message.
-
-    Returns:
-        The value as a plain integer.
-
-    Raises:
-        ValueError: If the value is a boolean or is not an integer.
-    """
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise ValueError(f"{name} must be an int, got {value!r}")
-    return int(value)
-
-
-def _require_index(value: object, name: str) -> int:
-    """Return ``value`` as a non-negative integer index.
+    A joker resets the pile to :class:`Unrestricted`; its enum value must never
+    act as a threshold. The rule is shared by both bounded constraints, so it is
+    named once here.
 
     Args:
-        value: Candidate identifier such as a card ID or a face-down slot.
+        rank: Bound the constraint was built with.
         name: Field name used in the error message.
 
-    Returns:
-        The value as a non-negative integer.
-
     Raises:
-        ValueError: If the value is not an integer or is negative.
+        ValueError: If the bound is ``Rank.JOKER``.
     """
-    number = _require_int(value, name)
-    if number < 0:
-        raise ValueError(f"{name} must be non-negative, got {number}")
-    return number
-
-
-def _require_rank(value: object, name: str) -> "Rank":
-    """Return ``value`` as a :class:`Rank`, accepting its integer value.
-
-    Args:
-        value: A ``Rank`` or the integer value of one.
-        name: Field name used in the error message.
-
-    Returns:
-        The corresponding ``Rank`` member.
-
-    Raises:
-        ValueError: If the value is not an integer or names no rank.
-    """
-    if isinstance(value, Rank):
-        return value
-    return Rank(_require_int(value, name))
+    if rank is Rank.JOKER:
+        raise ValueError(f"{name} cannot be a joker; a joker resets to Unrestricted")
 
 
 @dataclass(frozen=True, slots=True)
@@ -194,20 +163,18 @@ class Card:
     suit: Suit | None
 
     def __post_init__(self) -> None:
-        """Canonicalize the identifier and enforce joker/suit consistency.
+        """Enforce a usable identifier and joker/suit consistency.
 
         Raises:
-            ValueError: If the identifier is not a non-negative integer, the
-                rank is unknown, a joker carries a suit, or an ordinary card
-                lacks one.
+            ValueError: If the identifier is negative, a joker carries a suit,
+                or an ordinary card lacks one.
         """
-        object.__setattr__(self, "id", CardId(_require_index(self.id, "Card.id")))
-        object.__setattr__(self, "rank", _require_rank(self.rank, "Card.rank"))
-        if self.rank is Rank.JOKER:
-            if self.suit is not None:
-                raise ValueError("A joker has no suit")
-        elif not isinstance(self.suit, Suit):
-            raise ValueError(f"An ordinary card needs a suit, got {self.suit!r}")
+        if self.id < 0:
+            raise ValueError(f"Card.id must be non-negative, got {self.id}")
+        if self.rank is Rank.JOKER and self.suit is not None:
+            raise ValueError("A joker has no suit")
+        if self.rank is not Rank.JOKER and self.suit is None:
+            raise ValueError("An ordinary card needs a suit")
 
 
 @dataclass(frozen=True, slots=True)
@@ -226,15 +193,13 @@ class AtLeast:
     rank: Rank
 
     def __post_init__(self) -> None:
-        """Canonicalize the rank and reject a joker as a comparison bound.
+        """Reject a joker as a comparison bound.
 
         Raises:
-            ValueError: If the rank is unknown or is ``Rank.JOKER``, whose enum
-                value must never determine game strength.
+            ValueError: If the bound is ``Rank.JOKER``, whose enum value must
+                never determine game strength.
         """
-        object.__setattr__(self, "rank", _require_rank(self.rank, "AtLeast.rank"))
-        if self.rank is Rank.JOKER:
-            raise ValueError("A joker never sets a rank bound; it resets to Unrestricted")
+        _reject_joker_bound(self.rank, "AtLeast.rank")
 
 
 @dataclass(frozen=True, slots=True)
@@ -249,14 +214,12 @@ class AtMost:
     rank: Rank
 
     def __post_init__(self) -> None:
-        """Canonicalize the rank and reject a joker as a comparison bound.
+        """Reject a joker as a comparison bound.
 
         Raises:
-            ValueError: If the rank is unknown or is ``Rank.JOKER``.
+            ValueError: If the bound is ``Rank.JOKER``.
         """
-        object.__setattr__(self, "rank", _require_rank(self.rank, "AtMost.rank"))
-        if self.rank is Rank.JOKER:
-            raise ValueError("A joker never sets a rank bound; it resets to Unrestricted")
+        _reject_joker_bound(self.rank, "AtMost.rank")
 
 
 type PlayConstraint = Unrestricted | AtLeast | AtMost
@@ -276,22 +239,18 @@ class Arrange:
     face_up_cards: tuple[CardId, CardId, CardId]
 
     def __post_init__(self) -> None:
-        """Validate and canonicalize the chosen identifiers.
+        """Check the identifiers name three distinct cards, then sort them.
 
         Raises:
-            ValueError: If the submission does not contain exactly three
-                distinct non-negative integer identifiers.
+            ValueError: If an identifier is negative or the three are not
+                distinct. The arity itself is carried by the annotation.
         """
-        try:
-            given = tuple(self.face_up_cards)
-        except TypeError as error:
-            raise ValueError("Arrange.face_up_cards must be a sequence of three IDs") from error
-        if len(given) != 3:
-            raise ValueError(f"Arrange requires exactly three card IDs, got {len(given)}")
-        ids = tuple(_require_index(value, "Arrange.face_up_cards") for value in given)
+        ids = self.face_up_cards
+        if any(card_id < 0 for card_id in ids):
+            raise ValueError(f"Arrange requires non-negative card IDs, got {ids}")
         if len(set(ids)) != 3:
             raise ValueError(f"Arrange requires three distinct card IDs, got {ids}")
-        object.__setattr__(self, "face_up_cards", tuple(sorted(CardId(value) for value in ids)))
+        object.__setattr__(self, "face_up_cards", tuple(sorted(ids)))
 
 
 @dataclass(frozen=True, slots=True)
@@ -312,19 +271,16 @@ class Play:
     count: int
 
     def __post_init__(self) -> None:
-        """Validate the source zone, canonicalize the rank, and check the count.
+        """Check the source zone is playable and the batch is not empty.
 
         Raises:
-            ValueError: If the source is not a playable zone, the rank is
-                unknown, or the count is not a positive integer.
+            ValueError: If the source is the face-down zone or the count is not
+                positive.
         """
         if self.source not in (Zone.HAND, Zone.FACE_UP):
-            raise ValueError(f"Play.source must be HAND or FACE_UP, got {self.source!r}")
-        object.__setattr__(self, "rank", _require_rank(self.rank, "Play.rank"))
-        count = _require_int(self.count, "Play.count")
-        if count < 1:
-            raise ValueError(f"Play.count must be positive, got {count}")
-        object.__setattr__(self, "count", count)
+            raise ValueError(f"Play.source must be HAND or FACE_UP, got {self.source}")
+        if self.count < 1:
+            raise ValueError(f"Play.count must be positive, got {self.count}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -339,12 +295,13 @@ class Reveal:
     slot: SlotId
 
     def __post_init__(self) -> None:
-        """Canonicalize the slot identifier.
+        """Check the slot identifier is usable.
 
         Raises:
-            ValueError: If the slot is not a non-negative integer.
+            ValueError: If the slot is negative.
         """
-        object.__setattr__(self, "slot", SlotId(_require_index(self.slot, "Reveal.slot")))
+        if self.slot < 0:
+            raise ValueError(f"Reveal.slot must be non-negative, got {self.slot}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -366,6 +323,12 @@ class RulesConfig:
     The first release supports exactly one profile. The fields document its
     numbers rather than offering configuration: :meth:`validate` rejects any
     changed value so a modified profile can never claim to be ``shed-v1``.
+
+    Like every type here, the profile assumes its annotations: the fields are
+    integers, and a decoder is responsible for rejecting external data that only
+    looks like one (``3.0`` is not ``initial_hand_size``). Validation covers the
+    domain question instead -- whether a correctly typed profile is the one this
+    release implements.
 
     Attributes:
         id: Profile identifier recorded in replays.
@@ -395,6 +358,10 @@ class RulesConfig:
 
     def validate(self) -> None:
         """Check that this configuration is the unmodified ``shed-v1`` profile.
+
+        Every public entry point that consumes a profile calls this, so a
+        correctly typed but unsupported configuration is refused rather than
+        quietly producing a non-standard game.
 
         Raises:
             ValueError: If the identifier is unknown or any field differs from
@@ -438,11 +405,17 @@ def build_deck(config: RulesConfig = DEFAULT_RULES) -> tuple[Card, ...]:
     change, which is what makes recorded deals reproducible.
 
     Args:
-        config: Rules profile supplying the joker count.
+        config: Rules profile supplying the joker count. It is validated here,
+            so an unsupported profile cannot produce a non-standard deck through
+            this entry point or through :func:`shed.engine.state.shuffled_deck`.
 
     Returns:
         The 54 canonical cards in identifier order.
+
+    Raises:
+        ValueError: If the profile is not the fixed ``shed-v1`` profile.
     """
+    config.validate()
     cards: list[Card] = []
     for suit in SUIT_ORDER:
         for rank in ORDINARY_RANKS:

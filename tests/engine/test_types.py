@@ -12,6 +12,7 @@ from shed.engine import (
     AtMost,
     Card,
     CardId,
+    Move,
     Phase,
     PickUp,
     Play,
@@ -23,6 +24,7 @@ from shed.engine import (
     Suit,
     Zone,
     build_deck,
+    shuffled_deck,
 )
 
 
@@ -61,11 +63,14 @@ def test_jokers_and_ordinary_cards_must_agree_on_suits() -> None:
         Card(id=CardId(0), rank=Rank.ACE, suit=None)
 
 
-@pytest.mark.parametrize("bad_id", [True, False, -1, "3", 1.0])
-def test_card_identifiers_must_be_non_negative_integers(bad_id: object) -> None:
-    """Booleans, floats, strings, and negatives are rejected as card IDs."""
-    with pytest.raises(ValueError, match="Card.id"):
-        Card(id=bad_id, rank=Rank.ACE, suit=Suit.CLUBS)  # ty: ignore[invalid-argument-type]
+def test_card_identifiers_must_be_non_negative() -> None:
+    """A negative identifier names no physical card.
+
+    Non-integer input is a decoding concern, not an engine one: the annotation
+    declares ``CardId`` and the future decoder enforces it.
+    """
+    with pytest.raises(ValueError, match="Card.id must be non-negative"):
+        Card(id=CardId(-1), rank=Rank.ACE, suit=Suit.CLUBS)
 
 
 def test_cards_are_immutable_and_hashable() -> None:
@@ -87,17 +92,20 @@ def test_arrange_canonicalizes_identifier_order() -> None:
 @pytest.mark.parametrize(
     ("card_ids", "message"),
     [
-        ((1, 2), "exactly three"),
-        ((1, 2, 3, 4), "exactly three"),
-        ((1, 2, 2), "distinct"),
-        ((1, 2, True), "must be an int"),
-        ((1, 2, -3), "non-negative"),
+        ((CardId(1), CardId(2), CardId(2)), "distinct"),
+        ((CardId(1), CardId(2), CardId(-3)), "non-negative"),
     ],
 )
-def test_arrange_rejects_malformed_submissions(card_ids: tuple[int, ...], message: str) -> None:
-    """Wrong counts, duplicates, booleans, and negatives are all rejected."""
+def test_arrange_rejects_invalid_identifier_sets(
+    card_ids: tuple[CardId, CardId, CardId], message: str
+) -> None:
+    """Duplicate and negative identifiers name no valid three-card choice.
+
+    The arity is carried by the annotation, so a wrong-length submission is a
+    type error rather than a runtime check.
+    """
     with pytest.raises(ValueError, match=message):
-        Arrange(card_ids)  # ty: ignore[invalid-argument-type]
+        Arrange(card_ids)
 
 
 def test_play_accepts_only_hand_and_face_up_sources() -> None:
@@ -108,49 +116,39 @@ def test_play_accepts_only_hand_and_face_up_sources() -> None:
         Play(Zone.FACE_DOWN, Rank.FIVE, 1)
 
 
-@pytest.mark.parametrize("bad_count", [0, -1, True, 1.5, "1"])
-def test_play_requires_a_positive_integer_count(bad_count: object) -> None:
-    """Counts must be real positive integers, never booleans or floats."""
-    with pytest.raises(ValueError, match="Play.count"):
-        Play(Zone.HAND, Rank.FIVE, bad_count)  # ty: ignore[invalid-argument-type]
+@pytest.mark.parametrize("bad_count", [0, -1])
+def test_play_requires_a_positive_count(bad_count: int) -> None:
+    """A batch of no cards is not a decision."""
+    with pytest.raises(ValueError, match="Play.count must be positive"):
+        Play(Zone.HAND, Rank.FIVE, bad_count)
 
 
-def test_play_canonicalizes_a_decoded_integer_rank() -> None:
-    """A rank decoded as a plain integer becomes the matching enum member."""
-    decoded = Play(Zone.HAND, 7, 2)  # ty: ignore[invalid-argument-type]
-    assert decoded.rank is Rank.SEVEN
-    assert decoded == Play(Zone.HAND, Rank.SEVEN, 2)
-    with pytest.raises(ValueError):
-        Play(Zone.HAND, 99, 1)  # ty: ignore[invalid-argument-type]
-
-
-def test_reveal_requires_a_non_negative_integer_slot() -> None:
-    """Slot identifiers are validated the same way card identifiers are."""
+def test_reveal_requires_a_non_negative_slot() -> None:
+    """A negative slot names no face-down position."""
     assert Reveal(SlotId(2)).slot == 2
-    with pytest.raises(ValueError, match="Reveal.slot"):
-        Reveal(True)  # ty: ignore[invalid-argument-type]
-    with pytest.raises(ValueError, match="non-negative"):
+    with pytest.raises(ValueError, match="Reveal.slot must be non-negative"):
         Reveal(SlotId(-1))
 
 
 def test_moves_are_immutable_and_hashable() -> None:
     """Every move type is a frozen, hashable value object."""
-    moves = [
+    moves: list[Move] = [
         Arrange((CardId(0), CardId(1), CardId(2))),
         Play(Zone.HAND, Rank.TWO, 1),
         Reveal(SlotId(0)),
         PickUp(),
     ]
     assert len(set(moves)) == 4
+    batch = Play(Zone.HAND, Rank.TWO, 1)
     with pytest.raises(AttributeError):
-        moves[1].count = 2  # ty: ignore[invalid-assignment]
+        batch.count = 2  # ty: ignore[invalid-assignment]
     assert PickUp() == PickUp()
 
 
 def test_constraints_reject_a_joker_as_a_rank_bound() -> None:
     """A joker's enum value must never act as a comparison bound."""
     for constraint in (AtLeast, AtMost):
-        with pytest.raises(ValueError, match="never sets a rank bound"):
+        with pytest.raises(ValueError, match="cannot be a joker"):
             constraint(Rank.JOKER)
 
 
@@ -163,21 +161,40 @@ def test_default_rules_profile_validates() -> None:
 
 
 @pytest.mark.parametrize(
-    ("changes", "message"),
+    ("config", "message"),
     [
-        ({"id": "shed-v2"}, "Unknown rules profile"),
-        ({"max_players": 6}, "max_players"),
-        ({"refill_target": 4}, "refill_target"),
-        ({"joker_count": 0, "initial_hand_size": 2}, "initial_hand_size, joker_count"),
+        (RulesConfig(id="shed-v2"), "Unknown rules profile"),
+        (RulesConfig(max_players=6), "max_players"),
+        (RulesConfig(refill_target=4), "refill_target"),
+        (RulesConfig(joker_count=0, initial_hand_size=2), "initial_hand_size, joker_count"),
     ],
+    ids=["unknown_id", "max_players", "refill_target", "two_fields"],
 )
-def test_modified_profiles_are_rejected(changes: dict[str, object], message: str) -> None:
+def test_correctly_typed_but_unsupported_profiles_are_rejected(
+    config: RulesConfig, message: str
+) -> None:
     """A changed profile must never silently claim to be ``shed-v1``."""
-    config = RulesConfig(**changes)  # ty: ignore[invalid-argument-type]
     with pytest.raises(ValueError, match=message):
         config.validate()
     with pytest.raises(ValueError, match=message):
         Ruleset(config)
+
+
+@pytest.mark.parametrize(
+    "config",
+    [RulesConfig(joker_count=0), RulesConfig(id="shed-v2")],
+    ids=["no_jokers", "unknown_id"],
+)
+def test_deck_construction_rejects_unsupported_profiles(config: RulesConfig) -> None:
+    """A public deck builder never returns a deck the profile cannot support.
+
+    ``joker_count=0`` is correctly typed and would otherwise quietly yield a
+    52-card deck through both exported entry points.
+    """
+    with pytest.raises(ValueError):
+        build_deck(config)
+    with pytest.raises(ValueError):
+        shuffled_deck(seed=1, config=config)
 
 
 def test_phases_and_zones_are_distinct_values() -> None:

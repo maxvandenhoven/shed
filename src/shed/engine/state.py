@@ -367,8 +367,15 @@ def build_view(
     if player not in state.players:
         raise StateInvariantError(f"Player {player} has no seat in this game")
     if state.phase is Phase.PLAY and state.current_player is not None:
-        # Enforces the decision-boundary invariant without mutating anything.
-        state.players[state.current_player].active_zone(len(state.draw_pile))
+        # Read-only enforcement of the actor's decision-boundary invariants: a
+        # pending refill raises inside active_zone, and an actor with nothing
+        # left means termination was never resolved.
+        actor = state.players[state.current_player]
+        if actor.active_zone(len(state.draw_pile)) is None:
+            raise StateInvariantError(
+                f"Actor {state.current_player} holds no cards; resolve termination "
+                "before requesting another decision"
+            )
     return PlayerView(
         rules=state.rules,
         viewer=player,
@@ -557,6 +564,11 @@ def validate_decision_boundary(state: GameState) -> None:
                 raise StateInvariantError("PLAY requires an actor")
             if state.outcome is not None:
                 raise StateInvariantError("PLAY cannot have an outcome")
+            if not state.players[state.current_player].remaining_count:
+                raise StateInvariantError(
+                    f"Actor {state.current_player} holds no cards; resolve termination "
+                    "before requesting another decision"
+                )
         case Phase.FINISHED:
             if state.setup is not None:
                 raise StateInvariantError("FINISHED must not retain setup state")

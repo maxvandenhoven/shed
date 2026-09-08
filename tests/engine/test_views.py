@@ -16,6 +16,7 @@ from shed.engine import (
     StateInvariantError,
     Zone,
     build_view,
+    filter_events_for,
 )
 from tests.conftest import DeckPicker, build_play_state, plays_in
 
@@ -167,11 +168,16 @@ def test_hidden_assignments_cannot_change_what_a_viewer_sees(
 
 
 def test_history_is_passed_through_untouched(ruleset: Ruleset) -> None:
-    """The view carries exactly the filtered history the caller supplies."""
+    """The view carries exactly the filtered history the caller supplies.
+
+    ``observe`` deliberately does not filter: the caller owns history, so it
+    must hand over events already filtered for this viewer. Passing raw engine
+    events here would put opponents' hand identities into the observation.
+    """
     state = _dealt(ruleset)
-    events = ruleset.initial_events(state)
-    view = ruleset.observe(state, PlayerId(0), history=events)
-    assert view.history == events
+    filtered = filter_events_for(ruleset.initial_events(state), PlayerId(0))
+    view = ruleset.observe(state, PlayerId(0), history=filtered)
+    assert view.history == filtered
     assert isinstance(view.history, tuple)
     assert ruleset.observe(state, PlayerId(0)).history == ()
 

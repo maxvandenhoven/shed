@@ -20,6 +20,12 @@ The engine is being built in milestones. What exists today:
 | **Ordinary PLAY resolution** — batch transfer, reveals, burns, pickup, refill, termination | **Remaining engine work** |
 | Agents, match runner, replay format, gauntlet, scripts | Not started |
 
+The engine works on strictly typed domain objects: constructors take a `Rank`,
+not an integer they convert into one, and check domain invariants only — `ty`
+enforces the annotations. Validating untyped external data and building these
+objects from it is the job of the future replay and transport layers, so the
+engine stays free of JSON and decoding.
+
 `Ruleset.apply_move()` therefore resolves arrangements only. A legal PLAY move
 is validated and then refused with `NotImplementedError`: the engine never
 reports a transition that did not happen. Everything else about a PLAY position

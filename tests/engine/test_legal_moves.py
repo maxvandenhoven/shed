@@ -92,12 +92,6 @@ def test_joker_strength_never_comes_from_its_enum_value() -> None:
     assert can_play_rank(Rank.ACE, AtMost(Rank.THREE)) is False
 
 
-def test_unknown_constraint_is_rejected() -> None:
-    """An unrecognized constraint is a programming error, not a legal move."""
-    with pytest.raises(ValueError, match="Unknown play constraint"):
-        can_play_rank(Rank.FIVE, "anything")  # ty: ignore[invalid-argument-type]
-
-
 def test_every_batch_count_of_a_playable_rank_is_offered(
     ruleset: Ruleset, picker: DeckPicker
 ) -> None:
@@ -241,10 +235,26 @@ def test_face_down_moves_never_leak_the_hidden_ranks(ruleset: Ruleset, picker: D
     assert swapped.get_legal_moves() == offered
 
 
-def test_a_player_with_no_cards_left_has_no_moves(ruleset: Ruleset, picker: DeckPicker) -> None:
-    """An exhausted actor is offered nothing; termination is a separate step."""
-    state = build_play_state(picker, hands={PlayerId(0): [], PlayerId(1): []})
-    assert state.get_legal_moves() == ()
+def test_an_exhausted_actor_is_not_a_decision_boundary(
+    ruleset: Ruleset, picker: DeckPicker
+) -> None:
+    """An actor with no cards means termination was never resolved.
+
+    Empty legal moves stay correct for a finished game or a non-acting viewer,
+    but scheduling a player who holds nothing is an engine bug, so the position
+    is refused instead of yielding a decision nobody can make.
+    """
+    exhausted = {PlayerId(0): [], PlayerId(1): []}
+    with pytest.raises(StateInvariantError, match="holds no cards"):
+        build_play_state(picker, hands=exhausted)
+
+    state = build_play_state(picker, hands=exhausted, validate=False)
+    before = deepcopy(state)
+    with pytest.raises(StateInvariantError, match="holds no cards"):
+        ruleset.observe(state, PlayerId(0))
+    with pytest.raises(StateInvariantError, match="holds no cards"):
+        state.get_legal_moves()
+    assert state == before  # The rejected observation mutated nothing.
 
 
 def test_only_the_current_actor_receives_moves(ruleset: Ruleset, picker: DeckPicker) -> None:

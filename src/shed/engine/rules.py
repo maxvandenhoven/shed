@@ -90,8 +90,6 @@ OPENING_RANK_ORDER: tuple[Rank, ...] = (
 )
 """Ranks searched when choosing the opener; specials are deliberately last."""
 
-_MOVE_TYPES = (Arrange, Play, Reveal, PickUp)
-
 
 def can_play_rank(rank: Rank, constraint: PlayConstraint) -> bool:
     """Report whether a rank may be played against a constraint.
@@ -144,17 +142,22 @@ def _play_moves(view: PlayerView) -> tuple[Move, ...]:
     Returns:
         Reveal moves for a blind actor, otherwise every legal rank/count batch
         from the single active zone, or a forced pickup when nothing is
-        playable. An empty tuple means the actor holds no cards at all.
+        playable. Every live actor has at least one move.
 
     Raises:
-        StateInvariantError: If a refill is still pending for the actor.
+        StateInvariantError: If a refill is still pending for the actor, or the
+            actor holds no cards at all. Both mean the previous decision was
+            never fully resolved.
     """
     me = view.me
     zone = derive_active_zone(
         len(view.hand), len(me.face_up), len(me.face_down_slots), view.draw_count
     )
     if zone is None:
-        return ()
+        raise StateInvariantError(
+            f"Actor {view.viewer} holds no cards; resolve termination "
+            "before requesting another decision"
+        )
     if zone is Zone.FACE_DOWN:
         # Every remaining slot is legal; hidden ranks are never inspected here.
         return tuple(Reveal(slot) for slot in sorted(me.face_down_slots))
@@ -353,16 +356,14 @@ class Ruleset:
             events in physical resolution order.
 
         Raises:
-            IllegalMoveError: If the move is malformed, out of phase, or not
-                among the actor's legal moves.
+            IllegalMoveError: If the move is out of phase or is not among the
+                actor's legal moves.
             NotImplementedError: For every PLAY decision. Ordinary play
                 resolution is the remaining engine work; the path is refused
                 explicitly rather than reported as a successful transition.
             StateInvariantError: If the state is not at a valid decision
                 boundary.
         """
-        if not isinstance(move, _MOVE_TYPES):
-            raise IllegalMoveError(f"{move!r} is not a move")
         if state.phase is Phase.FINISHED:
             raise IllegalMoveError("The game has finished; no move can be applied")
         actor = state.current_player
@@ -385,11 +386,12 @@ class Ruleset:
         undo = UndoRecord(before=deepcopy(state))
         try:
             events = self._apply_arrangement(state, actor, canonical)
+            # The postcondition is part of the transition: a state that fails it
+            # must be rolled back too, not left half-applied behind an error.
+            validate_decision_boundary(state)
         except Exception:
-            # Mutation may have begun; restore before propagating the failure.
             _restore(state, undo.before)
             raise
-        validate_decision_boundary(state)
         return Transition(decision=Decision(player=actor, move=canonical), undo=undo, events=events)
 
     def _apply_arrangement(

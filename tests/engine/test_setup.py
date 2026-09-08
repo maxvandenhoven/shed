@@ -11,12 +11,14 @@ from shed.engine import (
     CardId,
     GameState,
     IllegalMoveError,
+    Move,
     Phase,
     PickUp,
     Play,
     PlayerId,
     Rank,
     Ruleset,
+    StateInvariantError,
     Zone,
 )
 from tests.conftest import (
@@ -87,20 +89,13 @@ def test_arrangements_naming_unowned_cards_are_rejected(ruleset: Ruleset) -> Non
 
 
 @pytest.mark.parametrize("move", [Play(Zone.HAND, Rank.FIVE, 1), PickUp()], ids=["play", "pickup"])
-def test_play_moves_are_rejected_during_setup(ruleset: Ruleset, move: object) -> None:
+def test_play_moves_are_rejected_during_setup(ruleset: Ruleset, move: Move) -> None:
     """Only arrangements resolve in SETUP, and rejection mutates nothing."""
     state = ruleset.create_initial_state(2, seed=25)
     before = deepcopy(state)
     with pytest.raises(IllegalMoveError):
-        ruleset.apply_move(state, move)  # ty: ignore[invalid-argument-type]
+        ruleset.apply_move(state, move)
     assert state == before
-
-
-def test_a_non_move_object_is_rejected(ruleset: Ruleset) -> None:
-    """Decoded rubbish never reaches the transition helpers."""
-    state = ruleset.create_initial_state(2, seed=26)
-    with pytest.raises(IllegalMoveError, match="is not a move"):
-        ruleset.apply_move(state, "arrange")  # ty: ignore[invalid-argument-type]
 
 
 def test_submissions_stay_private_until_everyone_has_chosen(ruleset: Ruleset) -> None:
@@ -247,6 +242,41 @@ def test_opener_is_chosen_from_hands_after_arranging_not_before(picker: DeckPick
     assert state.phase is Phase.PLAY
     assert low.id in {card.id for card in state.players[PlayerId(0)].face_up}
     assert state.current_player == 1  # Seat 1's four is now the lowest hand rank.
+
+
+def test_failed_postcondition_validation_rolls_the_whole_transition_back(
+    ruleset: Ruleset, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A postcondition failure leaves no half-applied arrangement behind.
+
+    The postcondition check belongs to the transition, so a state that fails it
+    is restored on the caller's own object rather than reported as an error over
+    a mutated position.
+    """
+    state = ruleset.create_initial_state(3, seed=36)
+    before = deepcopy(state)
+    identity = id(state)
+
+    def explode(_state: GameState) -> None:
+        """Stand in for an invariant the transition happens to break.
+
+        Args:
+            _state: The state that would have been validated.
+
+        Raises:
+            StateInvariantError: Always.
+        """
+        raise StateInvariantError("simulated postcondition failure")
+
+    monkeypatch.setattr("shed.engine.rules.validate_decision_boundary", explode)
+    with pytest.raises(StateInvariantError, match="simulated postcondition failure"):
+        ruleset.apply_move(state, state.get_legal_moves()[0])
+
+    assert id(state) == identity  # Restored in place, not rebound.
+    assert state == before
+    assert state.setup is not None
+    assert state.setup.submissions == {}
+    assert state.current_player == before.current_player
 
 
 def test_setup_undo_restores_a_pending_submission(ruleset: Ruleset) -> None:

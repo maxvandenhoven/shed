@@ -262,11 +262,15 @@ class RulesConfig:
     refill_target: int = 3
 ```
 
-Validate card/joker suit consistency: jokers have no suit, ordinary cards have a suit. `Play` accepts only hand or face-up sources and positive counts. `Arrange` requires exactly three distinct IDs and normalizes their order ascending. Legality then checks ownership and availability. Counts and IDs must be actual integers, not booleans masquerading as integers in decoded input.
+Validate card/joker suit consistency: jokers have no suit, ordinary cards have a suit. `Play` accepts only hand or face-up sources and positive counts. `Arrange` requires three distinct non-negative IDs and normalizes their order ascending. Legality then checks ownership and availability.
+
+**Strict domain types.** Engine constructors take correctly typed domain objects and assume their annotations hold: `Play` takes a `Rank`, never an integer it converts into one. `__post_init__` checks domain invariants only — non-negative identifiers and slots, positive play counts, playable sources, distinct arrangement IDs, joker/suit consistency, supported profiles — and never coerces or runtime-type-checks its inputs. `ty` enforces the annotations for engine callers, and a decoding failure is a decoder bug rather than something every constructor re-checks.
+
+Serialization and deserialization belong entirely outside the engine, in the replay and transport layers. Those layers validate untyped external data — decoded JSON, agent messages — where it enters the process and construct domain objects before calling the engine; the engine itself stays free of JSON, transport, and replay decoding. This deliberately supersedes the earlier requirement that constructors coerce decoded representations and reject booleans masquerading as integers: those checks are the decoder's, and their tests belong to the decoder.
 
 All moves and cards are immutable and hashable. Canonicalization ensures equivalent arrangements compare equal; rank/count moves already eliminate suit permutations. Face-up public cards and hand tuples are sorted by card ID for stable representation; discard/draw order is meaningful and must be preserved.
 
-`RulesConfig` documents the fixed profile; first release must reject changed field values or unknown IDs rather than silently claiming they are `shed-v1`. Earlier optional flags for tens, jokers, pickup, and burns are deliberately replaced by fixed semantics. Add profiles only alongside explicit rules and tests.
+`RulesConfig` documents the fixed profile; first release must reject changed field values or unknown IDs rather than silently claiming they are `shed-v1`. Validation covers correctly typed configurations, and every public entry point that consumes a profile — deck construction included — calls it, so a supported-looking but changed profile can never quietly produce a non-standard deck or game. Earlier optional flags for tens, jokers, pickup, and burns are deliberately replaced by fixed semantics. Add profiles only alongside explicit rules and tests.
 
 ## 6. Authoritative state and observations
 
@@ -741,7 +745,7 @@ Wall-time search is not bit-for-bit reproducible: scheduling changes how many im
 
 ### Replay format
 
-Write UTF-8 JSON with explicit tags for moves, constraints, and events; store enum string names or values consistently and decode explicitly. Do not save pickle as the replay format. Example move encoding: `{"type":"play","source":"hand","rank":7,"count":2}`.
+Write UTF-8 JSON with explicit tags for moves, constraints, and events; store enum string names or values consistently and decode explicitly. Decoding is where external data is validated: check tags, types, and ranges, then build the engine's domain objects (`Rank`, `CardId`, `Play`, …) and hand those to the engine, which assumes them well-typed. Do not save pickle as the replay format. Example move encoding: `{"type":"play","source":"hand","rank":7,"count":2}`.
 
 Metadata includes replay schema, ruleset ID/config, package version, source revision if available, Python version, player count, dealer, canonical initial deck order, deal seed, agent specs/seeds, timing/failure policy, and final match status. Storing initial deck order alongside the seed makes replay independent of future shuffle implementation changes. Neither is exposed to agents.
 
@@ -879,7 +883,7 @@ Use `argparse`. `--agents` supplies a lineup; repeated kinds get distinct instan
 - Keep clocks, processes, file I/O, and randomness out of legal-move generation.
 - Inject or construct independent RNGs explicitly. Never seed global `random`.
 - Use deterministic iteration and canonical serialized forms. Never let set iteration choose moves or determine card transfer order.
-- Validate external/agent input with exceptions or rejection results. Use assertions for internal invariants only; do not rely on them for validation under optimized Python.
+- Validate external/agent input with exceptions or rejection results, at the decoding and transport boundaries where it arrives. Engine code assumes its annotated types and checks domain invariants only. Use assertions for internal invariants only; do not rely on them for validation under optimized Python.
 - Introduce `IllegalMoveError(ValueError)` and `StateInvariantError(RuntimeError)`; avoid broad exception swallowing. Catch agent exceptions only at the worker boundary and engine failures at the runner boundary.
 - Use **Google-style docstrings everywhere**: modules, classes, functions, methods, properties, private helpers, scripts, tests, and fixtures. Document contracts, ownership, hidden-information restrictions, and timing semantics. Comments explain why a choice exists, not each obvious assignment.
 - Avoid getters/setters for plain data, abstract classes for individual cards, service locators, registries, and redundant caches.

@@ -163,6 +163,7 @@ def build_play_state(
     draw_count: int = 0,
     current_player: PlayerId = FIRST_SEAT,
     dealer: PlayerId = FIRST_SEAT,
+    validate: bool = True,
 ) -> GameState:
     """Craft a valid PLAY state for testing legality before play resolution.
 
@@ -181,9 +182,13 @@ def build_play_state(
         draw_count: Cards to leave in the draw pile.
         current_player: The actor to schedule.
         dealer: Dealing seat.
+        validate: Whether to assert the decision-boundary invariants. Pass
+            ``False`` only to build a deliberately invalid position for a test
+            that checks how the engine rejects it.
 
     Returns:
-        A PLAY state that satisfies the decision-boundary invariants.
+        A PLAY state, by default one that satisfies the decision-boundary
+        invariants.
     """
     pile = list(discard)
     if not pile and not isinstance(constraint, Unrestricted):
@@ -205,7 +210,8 @@ def build_play_state(
         setup=None,
         outcome=None,
     )
-    validate_decision_boundary(state)
+    if validate:
+        validate_decision_boundary(state)
     return state
 
 
