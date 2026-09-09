@@ -1,4 +1,4 @@
-"""Agent interface, turn protocol, agent specification, and the built-in factory.
+"""The interface every strategy implements, and the channel it talks through.
 
 An agent sees exactly two things: one immutable :class:`~shed.engine.PlayerView`
 and a turn-scoped capability. It never receives the authoritative ``GameState``,
@@ -12,32 +12,27 @@ own, and works with typed :class:`~shed.engine.Move` objects that it neither
 encodes nor decodes. The turn is only a channel -- submit a candidate, ask how
 much time is left -- and the runner stays free to reject anything illegal.
 
-Agents are built fresh for every decision from a serializable
-:class:`AgentSpec` and an explicit seed, so no live object and no generator
-state ever crosses a process boundary. That is what keeps repeated construction
-from replaying the same random stream, and it is why the specification carries
-no seed of its own.
+This module is the root of the package: it imports engine types and nothing from
+``shed.agents`` itself. Strategies import their base class from here, and
+:mod:`shed.agents.factory` imports both this module and the strategies, so the
+dependencies inside the package run one way and no import is deferred into a
+function body.
+
+``TurnContext`` is defined beside its *consumer* rather than beside an
+implementation. The concrete pipe-backed context belongs to the match runner,
+which already imports this package to build agents; declaring the protocol there
+would make the two packages import each other.
 """
 
 from __future__ import annotations
 
 import random
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
 from typing import Protocol
 
 from shed.engine import Move, PlayerView
 
-__all__ = [
-    "AGENT_KINDS",
-    "Agent",
-    "AgentSpec",
-    "TurnContext",
-    "build_agent",
-]
-
-AGENT_KINDS: tuple[str, ...] = ("greedy", "random")
-"""Kinds :func:`build_agent` can build, sorted for stable error messages."""
+__all__ = ["Agent", "TurnContext"]
 
 
 class TurnContext(Protocol):
@@ -111,75 +106,3 @@ class Agent(ABC):
                 the engine generated for it.
             turn: The submission channel for this decision.
         """
-
-
-@dataclass(frozen=True, slots=True)
-class AgentSpec:
-    """A serializable description of one participant.
-
-    Specifications travel to workers and into results; live agents never do. The
-    spec deliberately carries no seed: seeds are drawn per decision and recorded
-    by the runner, so replaying a spec cannot resurrect a stale generator, and a
-    deck seed can never reach an agent by riding along in its configuration.
-
-    Typed configuration fields belong here only once an implemented agent needs
-    them.
-
-    Attributes:
-        kind: Which built-in strategy to build; one of :data:`AGENT_KINDS`.
-        name: Stable label used in results and console output. Repeated kinds
-            get distinct labels so a lineup can hold two of the same strategy.
-    """
-
-    kind: str
-    name: str
-
-    def __post_init__(self) -> None:
-        """Check the kind is buildable and the label is usable.
-
-        Validating here rather than in the factory means a mistyped lineup fails
-        where it is written, not inside a worker process at decision time.
-
-        Raises:
-            ValueError: If the kind is unknown or the name is empty.
-        """
-        if self.kind not in AGENT_KINDS:
-            raise ValueError(
-                f"Unknown agent kind {self.kind!r}; expected one of {', '.join(AGENT_KINDS)}"
-            )
-        if not self.name:
-            raise ValueError("AgentSpec.name must be a non-empty label")
-
-
-def build_agent(spec: AgentSpec, *, seed: int) -> Agent:
-    """Build a fresh agent for one decision.
-
-    Construction is explicit rather than discovered: the built-in kinds are
-    listed here, and adding a strategy means adding a branch and a kind.
-
-    Args:
-        spec: The participant to build. Its kind was already validated when the
-            specification was created.
-        seed: Seed for the new agent's generator. Pass a fresh value per
-            decision -- reusing one replays the same random stream -- and never
-            pass the deck or fallback seed.
-
-    Returns:
-        A newly constructed agent that shares no state with any previous one.
-
-    Raises:
-        ValueError: If the kind is not one this factory builds, which can only
-            happen if :data:`AGENT_KINDS` grew without a branch here.
-    """
-    # Imported inside the factory so the baselines can import this module for
-    # their base class without an import cycle. This is the only caller.
-    from shed.agents.greedy import GreedyAgent
-    from shed.agents.random import RandomAgent
-
-    match spec.kind:
-        case "greedy":
-            return GreedyAgent(seed=seed)
-        case "random":
-            return RandomAgent(seed=seed)
-        case _:
-            raise ValueError(f"No builder for agent kind {spec.kind!r}")

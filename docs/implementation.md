@@ -130,7 +130,8 @@ Use a normal `src` layout with one namespace package root, `shed`. Avoid separat
 | `src/shed/engine/state.py` | Mutable state and its operations, immutable observations, derived active zone, legality |
 | `src/shed/engine/events.py` | Event and transition/undo types |
 | `src/shed/agents/__init__.py` | Public agent exports |
-| `src/shed/agents/base.py` | Agent ABC, turn protocol, serializable `AgentSpec`, built-in factory |
+| `src/shed/agents/base.py` | Agent ABC and turn protocol; imports nothing else from the package |
+| `src/shed/agents/factory.py` | Serializable `AgentSpec` and the built-in factory over the strategies |
 | `src/shed/agents/random.py` | Random baseline |
 | `src/shed/agents/greedy.py` | Deterministic shedding heuristic with seeded tie-breaking |
 | `src/shed/match.py` | Match runner, process worker, pipe context, turn-selection helper |
@@ -604,7 +605,7 @@ class AgentSpec:
 def build_agent(spec: AgentSpec, *, seed: int) -> Agent: ...
 ```
 
-Add typed configuration fields only when an implemented agent needs them. Do not store a deck seed in `AgentSpec`. A small explicit built-in factory suffices; dynamic discovery is unnecessary. The spec validates its own kind against the built-in list when it is constructed, so a mistyped lineup fails where it is written rather than inside a worker at decision time.
+Add typed configuration fields only when an implemented agent needs them. Do not store a deck seed in `AgentSpec`. A small explicit built-in factory suffices; dynamic discovery is unnecessary. It lives in its own module above the strategies rather than beside the `Agent` base class, so it can import every built-in agent at module scope: `base` holds the interface and imports nothing from the package, each strategy imports `base`, and `factory` imports both. The spec validates its own kind against the built-in list when it is constructed, so a mistyped lineup fails where it is written rather than inside a worker at decision time.
 
 Baselines can be driven synchronously with a fake in-memory turn context that captures submissions and dictates the clock. A whole match runs that way with no production timing code: create the state, filter `initial_events()` per player, observe the actor with that player's history, build a fresh agent from its spec and a fresh seed, let it think, apply the finalized move, then append the filtered transition events to every player's history.
 
