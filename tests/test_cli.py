@@ -35,16 +35,31 @@ from shed.engine import (
     AtLeast,
     AtMost,
     Card,
+    CardId,
     CardsDrawn,
     HandDealt,
+    Phase,
     PlayConstraint,
     PlayerId,
     Rank,
     Unrestricted,
 )
-from shed.match import MatchStatus
-from shed.replay import decode_replay, match_deck, match_document
+from shed.match import FinalPosition, MatchStatus, PlayerPosition
+from shed.replay import decode_replay, match_deck, match_document, verify_replay
 from tests.test_replay import DECK, roundtrip, sample_events, sync_match
+
+
+def key(card: Card) -> int:
+    """Sort key putting cards in canonical identifier order.
+
+    Args:
+        card: The card to place.
+
+    Returns:
+        Its identifier.
+    """
+    return int(card.id)
+
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 """The directory the documented commands are run from."""
@@ -288,6 +303,67 @@ class TestPositions:
         lines = describe_position(result.final_position, match_deck(result.metadata))
         assert result.outcome is not None
         assert "hand - | face up - | face down -" in lines[4 + result.outcome.winner]
+
+
+class TestOrdering:
+    """What the console sorts, and what it must leave exactly as it is."""
+
+    def test_a_group_of_cards_is_rendered_in_identifier_order(self) -> None:
+        """A dealt hand reads the same however the event happened to list it."""
+        cards = (DECK[50], DECK[8], DECK[2])
+        shuffled = HandDealt(player=PlayerId(0), count=3, cards=cards)
+        ordered = HandDealt(player=PlayerId(0), count=3, cards=tuple(sorted(cards, key=key)))
+
+        assert describe_event(shuffled, OMNISCIENT) == "player 0 is dealt 3 cards: 4 T K"
+        assert describe_event(shuffled, OMNISCIENT) == describe_event(ordered, OMNISCIENT)
+
+    def test_ordering_is_by_rank_not_by_the_suit_major_identifier(self) -> None:
+        """Identifiers run suit by suit, so identifier order would not look sorted."""
+        hand = (DECK[12], DECK[20], DECK[52])  # Ace of clubs, nine of diamonds, joker.
+        event = HandDealt(player=PlayerId(0), count=3, cards=hand)
+
+        assert describe_event(event, OMNISCIENT) == "player 0 is dealt 3 cards: 9 A JK"
+        assert [card.id for card in sorted(hand, key=key)] == [12, 20, 52]
+
+    def test_showing_suits_keeps_a_rank_together(self) -> None:
+        """The identifier tie-break groups one rank by suit rather than scattering it."""
+        both = ConsoleStyle(visibility=Visibility.OMNISCIENT, show_suits=True)
+        hand = (DECK[35], DECK[9], DECK[22], DECK[49])  # Jh, Jc, Jd, Qs.
+        event = HandDealt(player=PlayerId(0), count=4, cards=hand)
+
+        assert describe_event(event, both) == "player 0 is dealt 4 cards: Jc Jd Jh Qs"
+
+    def test_a_hand_is_sorted_but_the_piles_keep_their_order(self) -> None:
+        """The two piles are ordered structures; a hand is a bag of cards."""
+        position = FinalPosition(
+            phase=Phase.PLAY,
+            current_player=PlayerId(0),
+            current_ply=4,
+            constraint=Unrestricted(),
+            draw_pile=(CardId(5), CardId(1), CardId(3)),
+            discard_pile=(CardId(4), CardId(0)),
+            burned_cards=(CardId(8), CardId(6)),
+            players=(
+                PlayerPosition(
+                    player=PlayerId(0),
+                    hand=(CardId(9), CardId(2), CardId(7)),
+                    face_up=(),
+                    face_down=(),
+                ),
+            ),
+        )
+        lines = describe_position(position, DECK)
+
+        assert lines[1].endswith("7 3 5")  # draw order: identifiers 5, 1, 3.
+        assert lines[2].endswith("6 2")  # play order: identifiers 4, 0.
+        assert lines[3].endswith("8 T")  # burned is a bag, so sorted by rank.
+        assert lines[4].strip() == "player 0: hand 4 9 J | face up - | face down -"
+
+    def test_sorting_is_presentation_only(self) -> None:
+        """The engine's orders are untouched, so a replay still compares them."""
+        result = sync_match(max_play_decisions=6)
+        describe_position(result.final_position, match_deck(result.metadata))
+        assert verify_replay(decode_replay(roundtrip(match_document(result)))).ok
 
 
 class TestSummaries:

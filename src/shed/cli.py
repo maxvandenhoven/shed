@@ -190,17 +190,45 @@ def card_text(card: Card, style: ConsoleStyle = DEFAULT_STYLE) -> str:
     return f"{label}{card.suit.value[0]}"
 
 
-def _cards_text(cards: Iterable[Card], style: ConsoleStyle) -> str:
-    """Render a run of cards.
+def _reading_order(card: Card) -> tuple[int, int]:
+    """Sort a card the way a player would hold it: by rank, then by identifier.
+
+    Sorting by identifier alone would not look sorted. Identifiers run suit by
+    suit, so a hand of the ace of clubs, the nine of diamonds and a joker comes
+    out ``A 9 JK`` -- and with suits hidden, which is the default, there is
+    nothing on screen to explain the order. Rank first fixes that, and the
+    identifier breaks ties so the result is still deterministic and still groups
+    a rank by suit when suits are shown.
 
     Args:
-        cards: The cards, in the order they should be read.
+        card: The card to place.
+
+    Returns:
+        Its rank and identifier, in that order of significance.
+    """
+    return int(card.rank), int(card.id)
+
+
+def _cards_text(cards: Iterable[Card], style: ConsoleStyle) -> str:
+    """Render a group of cards in reading order, so it is easy to digest.
+
+    Every group this renders -- a dealt hand, a draw, a played batch, a set of
+    face-up cards, a pile taken into hand -- either has no meaningful order or
+    ends up somewhere that has none. Sorting them all means the same cards look
+    the same wherever they appear. The orders that *are* meaningful belong to
+    the discard and draw piles, which :func:`_pile_text` renders instead.
+
+    This is presentation only. The engine's own orders are untouched, and a
+    replay still compares them exactly, so nothing here can hide a wrong one.
+
+    Args:
+        cards: The cards to render, in any order.
         style: Presentation settings.
 
     Returns:
-        The rendered cards separated by spaces.
+        The rendered cards in :func:`_reading_order`, separated by spaces.
     """
-    return " ".join(card_text(card, style) for card in cards)
+    return " ".join(card_text(card, style) for card in sorted(cards, key=_reading_order))
 
 
 def _count_text(count: int, noun: str) -> str:
@@ -325,8 +353,12 @@ def _by_id(deck: Iterable[Card]) -> dict[int, Card]:
     return {int(card.id): card for card in deck}
 
 
-def _zone_text(identifiers: Iterable[int], cards: dict[int, Card], style: ConsoleStyle) -> str:
-    """Render one zone of a position.
+def _pile_text(identifiers: Iterable[int], cards: dict[int, Card], style: ConsoleStyle) -> str:
+    """Render a zone whose order means something, exactly as it is stored.
+
+    The discard pile is in play order and the draw pile is in draw order:
+    position decides what happens next in both, so neither may be reordered for
+    the console.
 
     Args:
         identifiers: Card identifiers in their stored order.
@@ -334,9 +366,28 @@ def _zone_text(identifiers: Iterable[int], cards: dict[int, Card], style: Consol
         style: Presentation settings.
 
     Returns:
-        The rendered cards, or ``-`` for an empty zone.
+        The rendered cards in that order, or ``-`` for an empty zone.
     """
     return " ".join(card_text(cards[identifier], style) for identifier in identifiers) or "-"
+
+
+def _zone_text(identifiers: Iterable[int], cards: dict[int, Card], style: ConsoleStyle) -> str:
+    """Render a zone whose order is incidental, in reading order.
+
+    A hand, a face-up set, and the burned collection are all bags of cards: the
+    order they happen to be stored in says nothing, and sorting makes two
+    positions comparable at a glance.
+
+    Args:
+        identifiers: Card identifiers in any order.
+        cards: Index built by :func:`_by_id`.
+        style: Presentation settings.
+
+    Returns:
+        The rendered cards in :func:`_reading_order`, or ``-`` for an empty
+        zone.
+    """
+    return _pile_text(sorted(identifiers, key=lambda i: _reading_order(cards[i])), cards, style)
 
 
 def describe_position(
@@ -348,6 +399,11 @@ def describe_position(
     narration says what happened, this says where everything ended up, face-down
     slots and the undrawn deck included. Print it only when the operator asked
     for it.
+
+    The discard and draw piles are printed in their stored order, because
+    position decides what happens next in both. Every other zone is sorted by
+    rank, since its order says nothing and sorting makes two positions
+    comparable at a glance.
 
     Args:
         position: The digest to describe.
@@ -369,9 +425,9 @@ def describe_position(
         f"position: {position.phase.value} | ply {position.current_ply} | to act: {actor} | "
         f"constraint: {describe_constraint(position.constraint)}",
         f"  draw pile ({len(position.draw_pile)}, next draw last): "
-        f"{_zone_text(position.draw_pile, cards, style)}",
+        f"{_pile_text(position.draw_pile, cards, style)}",
         f"  discard ({len(position.discard_pile)}): "
-        f"{_zone_text(position.discard_pile, cards, style)}",
+        f"{_pile_text(position.discard_pile, cards, style)}",
         f"  burned ({len(position.burned_cards)}): "
         f"{_zone_text(position.burned_cards, cards, style)}",
     ]

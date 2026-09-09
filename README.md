@@ -255,8 +255,8 @@ in, face-down slots and undrawn deck included.
 
 ```
 $ uv run scripts/play.py --agents random greedy --seed 42 --max-play-decisions 10 --omniscient
-player 0 deals to 2 seats; player 0 shows 7 T 6, player 1 shows 8 3 T
-player 1 is dealt 3 cards: 4 K 5
+player 0 deals to 2 seats; player 0 shows 6 7 T, player 1 shows 3 8 T
+player 1 is dealt 3 cards: 4 5 K
 player 0 is dealt 3 cards: 2 3 A
 player 1 settles on 8 T K face up
 player 1 plays 3 from hand
@@ -268,8 +268,8 @@ player 0 burns 8 cards (ten)
 position: play | ply 10 | to act: player 0 | constraint: at least 5
   draw pile (26, next draw last): 2 T 7 6 8 J 5 7 4 J K Q 5 Q 9 5 9 8 6 JK Q Q J 4 K 2
   discard (2): 7 5
-  burned (8): 3 6 K 2 4 8 A T
-  player 0: hand A JK 9 | face up 7 3 A | face down 0=9 1=T 2=4
+  burned (8): 2 3 4 6 8 T K A
+  player 0: hand 9 A JK | face up 3 7 A | face down 0=9 1=T 2=4
   player 1: hand 2 J A | face up 8 T K | face down 0=3 1=3 2=6
 ```
 
@@ -286,6 +286,13 @@ Cards are spelled by rank alone, because a suit decides nothing in `shed-v1` and
 `J J 7` reads better than `Jc Jd 7h`. Both commands take `--show-suit` when you
 do want them — tracking one physical card through a pickup, say. The suits are
 in the replay file either way; this only changes the spelling on your terminal.
+
+Every group of cards is printed in reading order — by rank, with the card
+identifier breaking ties so it stays deterministic and keeps one rank's suits
+together. The two exceptions are the discard and draw piles, which are printed
+exactly as stored, because position decides what happens next in both. Sorting
+is presentation only: the engine's orders are untouched and a replay still
+compares them exactly, so a wrong one cannot hide behind a tidy console.
 
 Two commands from the specification belong to the next milestone and do not
 exist yet:
