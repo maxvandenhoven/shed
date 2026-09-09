@@ -19,7 +19,9 @@ The engine is being built in milestones. What exists today:
 | SETUP transition: private submissions, collective commit, opener choice | Implemented |
 | PLAY resolution: batch transfer, reveals, burns, pickup, refill, termination | Implemented |
 | Snapshot undo for every transition, including terminal ones | Implemented |
-| Agents, match runner, replay format, gauntlet, scripts | Not started |
+| Agent interface, `AgentSpec`, and the built-in factory | Implemented |
+| Random and greedy baselines across every phase | Implemented |
+| Match runner, replay format, gauntlet, scripts | Not started |
 
 The engine works on strictly typed domain objects: constructors take a `Rank`,
 not an integer they convert into one, and check domain invariants only — `ty`
@@ -34,9 +36,9 @@ actor — before returning. An illegal move mutates nothing, and any failure
 inside that boundary, the closing invariant check included, rolls the snapshot
 back. `undo_move()` restores fields on the existing object, LIFO.
 
-Timing, processes, and agents are deliberately outside the engine: the tests
-drive complete games with a small seeded helper that picks among the engine's
-own legal moves.
+Timing and processes are deliberately outside the engine and outside agents:
+the tests drive complete games with an in-memory turn context, so a baseline is
+exercised end to end without a deadline, a pipe, or a worker process.
 
 `GameState` is the entry point — it carries its own `RulesConfig`, so there is
 no separate rules object:
@@ -64,6 +66,32 @@ state.current_ply  # 1: PLAY decisions only, setup does not count
 state.undo_move(transition)  # back to the position before the decision
 state.is_finished, state.outcome  # False, None until somebody sheds everything
 ```
+
+An agent sees one observation and a turn-scoped submission channel, and
+nothing else. It reads its options from `view.legal_moves` — the engine is the
+only legality authority — and closes the decision with a final submission:
+
+```python
+from shed.agents import AgentSpec, build_agent
+from shed.engine import GameState, PlayerId
+
+state = GameState.create(2, seed=42)
+view = state.observe(PlayerId(1))  # seat 1 arranges first when seat 0 deals
+agent = build_agent(AgentSpec(kind="greedy", name="greedy-1"), seed=7)
+
+# `turn` comes from whoever runs the decision — the match runner once it
+# exists, or the in-memory fake the tests use. The agent submits into it:
+# turn.submit(move, final=True) closes the decision with that move.
+agent.think(view, turn)
+```
+
+Agents are built fresh for every decision from a serializable `AgentSpec` and an
+explicit seed, so no live object and no generator state is ever reused: a spec
+carries a kind and a label, never a deck or fallback seed. `RandomAgent` samples
+the legal rank/count actions uniformly. `GreedyAgent` keeps the cards that are
+hardest to shed — sevens, nines, twos, jokers, and tens score above every
+ordinary rank — sheds the largest batch it can, spends the cheapest cards among
+equally sized plays, and settles genuine ties with its seeded generator.
 
 ## Requirements
 
@@ -96,6 +124,7 @@ The review gates are the same commands with `ruff format --check .` in place of
 | --- | --- |
 | `src/shed/` | The `shed` package |
 | `src/shed/engine/` | Value types, events, and state with the game operations |
+| `src/shed/agents/` | Agent interface, specification, factory, and the baselines |
 | `tests/` | pytest suite |
 | `scripts/` | Command-line entry points (none yet) |
 | `docs/implementation.md` | Implementation specification |
