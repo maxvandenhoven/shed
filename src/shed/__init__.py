@@ -7,10 +7,10 @@ only; import the engine from :mod:`shed.engine` and the agents from
 Implemented so far: the complete deterministic engine -- the canonical deck,
 dealing, authoritative state, immutable player views, the event vocabulary with
 private-event filtering, legal-move generation, and atomic setup and play
-transitions with snapshot undo -- and the agent layer on top of it: the common
-interface, the serializable specification and its factory, and the random and
-greedy baselines. The match runner, replay format, and gauntlet described in
-``docs/implementation.md`` are not implemented yet.
+transitions with snapshot undo -- the agent layer on top of it, and the timed
+match runner in :mod:`shed.match`, which owns clocks, worker processes, the
+selection policy, and the records a match leaves behind. The replay format and
+the gauntlet described in ``docs/implementation.md`` are not implemented yet.
 
 Attributes:
     RULES_PROFILE_ID: Identifier of the fixed rules profile this package targets.
