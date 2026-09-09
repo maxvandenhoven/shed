@@ -4,9 +4,45 @@ An engine, interchangeable agents, and an evaluation gauntlet for **Shed**, a
 hidden-information card game for 2–5 players.
 
 The full design contract lives in [`docs/implementation.md`](docs/implementation.md).
-This repository currently contains the project scaffold and development
-workflow only: the game rules, agents, match runner, replay format, and
-gauntlet described in that document are **not implemented yet**.
+
+## Status
+
+The engine is being built in milestones. What exists today:
+
+| Area | State |
+| --- | --- |
+| Cards, moves, constraints, fixed `shed-v1` profile | Implemented |
+| Canonical 54-card deck, deterministic shuffle and deal | Implemented |
+| `GameState` operations, `PlayerView`, and the information boundary | Implemented |
+| Events, private-event filtering, transition/undo shape | Implemented |
+| Legal-move generation for setup, hand, face-up, face-down, forced pickup | Implemented |
+| SETUP transition: private submissions, collective commit, opener choice | Implemented |
+| **Ordinary PLAY resolution** — batch transfer, reveals, burns, pickup, refill, termination | **Remaining engine work** |
+| Agents, match runner, replay format, gauntlet, scripts | Not started |
+
+The engine works on strictly typed domain objects: constructors take a `Rank`,
+not an integer they convert into one, and check domain invariants only — `ty`
+enforces the annotations. Validating untyped external data and building these
+objects from it is the job of the future replay and transport layers, so the
+engine stays free of JSON and decoding.
+
+`GameState.apply_move()` resolves arrangements only. A legal PLAY move
+is validated and then refused with `NotImplementedError`: the engine never
+reports a transition that did not happen. Everything else about a PLAY position
+already works, so legality can be inspected on crafted states.
+
+`GameState` is the entry point — it carries its own `RulesConfig`, so there is
+no separate rules object:
+
+```python
+from shed.engine import GameState, PlayerId
+
+state = GameState.create(3, seed=42)  # SETUP, arrangements pending
+moves = state.get_legal_moves()  # the actor's 20 arrangements
+view = state.observe(PlayerId(1))  # immutable; hides everything private
+view.legal_moves  # the same tuple, for the actor only
+state.apply_move(moves[0])  # stored privately until all players choose
+```
 
 ## Requirements
 
@@ -37,7 +73,8 @@ The review gates are the same commands with `ruff format --check .` in place of
 
 | Path | Contents |
 | --- | --- |
-| `src/shed/` | The `shed` package (currently project metadata only) |
+| `src/shed/` | The `shed` package |
+| `src/shed/engine/` | Value types, events, and state with the game operations |
 | `tests/` | pytest suite |
 | `scripts/` | Command-line entry points (none yet) |
 | `docs/implementation.md` | Implementation specification |

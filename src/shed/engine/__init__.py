@@ -1,0 +1,134 @@
+"""Public interface of the Shed engine.
+
+The engine owns cards, authoritative state, observations, legality, and
+transitions. It depends only on the standard library and never imports agents,
+timing, scripts, or multiprocessing, nor any JSON, transport, or replay
+decoding.
+
+``GameState`` is the entry point: create a game with :meth:`GameState.create`,
+then use ``get_legal_moves``, ``observe``, ``initial_events``, ``apply_move``,
+and ``undo_move`` on it. Modules depend one way -- ``types`` defines the value
+types, ``events`` records what happened with them, and ``state`` builds the
+game on both -- and engine code imports from those modules directly rather than
+through this file.
+
+Milestone status: the deck, deterministic dealing, state and player views, the
+event vocabulary, legal-move generation, and the SETUP transition are
+implemented. Ordinary PLAY resolution is the remaining engine work, and
+``GameState.apply_move`` refuses PLAY decisions with ``NotImplementedError``
+rather than reporting a transition that did not happen.
+"""
+
+from shed.engine.events import (
+    ArrangementCommitted,
+    BurnReason,
+    CardRevealed,
+    CardsDrawn,
+    CardsPlayed,
+    Decision,
+    GameEnded,
+    GameStarted,
+    HandDealt,
+    ObservedEvent,
+    PileBurned,
+    PilePickedUp,
+    Transition,
+    UndoRecord,
+    filter_event_for,
+    filter_events_for,
+)
+from shed.engine.state import (
+    GameState,
+    PlayerState,
+    PlayerView,
+    SetupState,
+    can_play_rank,
+    deal_initial_state,
+    dealing_order,
+    shuffled_deck,
+    validate_decision_boundary,
+)
+from shed.engine.types import (
+    DEFAULT_DEALER,
+    DEFAULT_RULES,
+    ORDINARY_RANKS,
+    SUIT_ORDER,
+    Arrange,
+    AtLeast,
+    AtMost,
+    Card,
+    CardId,
+    IllegalMoveError,
+    Move,
+    Outcome,
+    Phase,
+    PickUp,
+    Play,
+    PlayConstraint,
+    PlayerId,
+    PublicPlayerState,
+    Rank,
+    Reveal,
+    RulesConfig,
+    SlotId,
+    StateInvariantError,
+    Suit,
+    Unrestricted,
+    Zone,
+    build_deck,
+)
+
+__all__ = [
+    "DEFAULT_DEALER",
+    "DEFAULT_RULES",
+    "ORDINARY_RANKS",
+    "SUIT_ORDER",
+    "Arrange",
+    "ArrangementCommitted",
+    "AtLeast",
+    "AtMost",
+    "BurnReason",
+    "Card",
+    "CardId",
+    "CardRevealed",
+    "CardsDrawn",
+    "CardsPlayed",
+    "Decision",
+    "GameEnded",
+    "GameStarted",
+    "GameState",
+    "HandDealt",
+    "IllegalMoveError",
+    "Move",
+    "ObservedEvent",
+    "Outcome",
+    "Phase",
+    "PickUp",
+    "PileBurned",
+    "PilePickedUp",
+    "Play",
+    "PlayConstraint",
+    "PlayerId",
+    "PlayerState",
+    "PlayerView",
+    "PublicPlayerState",
+    "Rank",
+    "Reveal",
+    "RulesConfig",
+    "SetupState",
+    "SlotId",
+    "StateInvariantError",
+    "Suit",
+    "Transition",
+    "UndoRecord",
+    "Unrestricted",
+    "Zone",
+    "build_deck",
+    "can_play_rank",
+    "deal_initial_state",
+    "dealing_order",
+    "filter_event_for",
+    "filter_events_for",
+    "shuffled_deck",
+    "validate_decision_boundary",
+]

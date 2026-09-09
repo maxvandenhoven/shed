@@ -1,8 +1,14 @@
 """Shed: an engine, agents, and gauntlet for the hidden-information card game Shed.
 
-The package is being built in milestones. Only project metadata is exported so
-far; the ``engine``, ``agents``, match runner, replay, and gauntlet modules
-described in ``docs/implementation.md`` are not implemented yet.
+The package is being built in milestones. This module exports project metadata
+only; import the engine from :mod:`shed.engine`.
+
+Implemented so far: the canonical deck, deterministic dealing, authoritative
+state, immutable player views, the event vocabulary with private-event
+filtering, legal-move generation, and the SETUP transition with snapshot undo.
+Ordinary PLAY resolution is the remaining engine work, and the ``agents``
+subpackage, match runner, replay format, and gauntlet described in
+``docs/implementation.md`` are not implemented yet.
 
 Attributes:
     RULES_PROFILE_ID: Identifier of the fixed rules profile this package targets.
