@@ -6,12 +6,21 @@ into a seated lineup, validating numeric arguments, narrating a match as public
 actions, and summarizing how one ended. Both the play command and the replay
 command use these, and the gauntlet command will.
 
-Narration has two settings, and the default is the careful one. Under
+How much a command prints is one object, :class:`ConsoleStyle`, threaded through
+every renderer here rather than a growing list of flags. It carries two
+independent settings, and both defaults are the quiet ones.
+
+:attr:`ConsoleStyle.visibility` decides what may be shown. Under
 :attr:`Visibility.PUBLIC` a private event is reported by its public count alone
 -- the same thing an opponent at the table knows -- and everything else printed
 is public by construction: cards already on the table, the pile, a revealed
 card. Under :attr:`Visibility.OMNISCIENT` the identities are printed too, and
 :func:`describe_position` will dump the authoritative position on top.
+
+:attr:`ConsoleStyle.show_suits` decides how a card is spelled. Suits never
+affect legality or strength in this profile, so ``J J 7`` is easier to read than
+``Jc Jd 7h`` and loses nothing a reader of the log needs; the suits are one flag
+away when they are wanted, and are always in the replay file regardless.
 
 Both are views of trusted data. The events a runner records and the events a
 replay file holds always carry hidden identities; ``PUBLIC`` is redaction
@@ -26,6 +35,7 @@ from __future__ import annotations
 import argparse
 import signal
 from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
 from enum import Enum
 
 from shed.agents import AGENT_KINDS, AgentSpec
@@ -54,7 +64,10 @@ from shed.match import FinalPosition, MatchMetadata, MatchResult, MatchStatus, T
 from shed.replay import Replay
 
 __all__ = [
+    "DEFAULT_STYLE",
+    "ConsoleStyle",
     "Visibility",
+    "console_style",
     "build_lineup",
     "card_text",
     "describe_constraint",
@@ -103,7 +116,58 @@ class Visibility(Enum):
     OMNISCIENT = "omniscient"
 
 
-def card_text(card: Card) -> str:
+@dataclass(frozen=True, slots=True)
+class ConsoleStyle:
+    """Everything the console renderers need to know about presentation.
+
+    One object rather than one parameter per setting: they all travel the same
+    way, from a command's arguments down to a single card, and a new setting
+    should not change five signatures.
+
+    Attributes:
+        visibility: How much of the record may be shown.
+        show_suits: Whether a card names its suit. Off by default, because
+            suits decide nothing in ``shed-v1`` and a log of bare ranks is
+            markedly easier to read.
+    """
+
+    visibility: Visibility = Visibility.PUBLIC
+    show_suits: bool = False
+
+    @property
+    def omniscient(self) -> bool:
+        """Whether hidden information may be printed under this style."""
+        return self.visibility is Visibility.OMNISCIENT
+
+
+def console_style(*, omniscient: bool, show_suits: bool) -> ConsoleStyle:
+    """Build the style a command's presentation switches ask for.
+
+    Both commands map the same two switches the same way, so the mapping lives
+    here rather than in each parser.
+
+    Args:
+        omniscient: Whether the operator asked to see hidden information.
+        show_suits: Whether the operator asked for suits on every card.
+
+    Returns:
+        The style to hand the renderers.
+    """
+    return ConsoleStyle(
+        visibility=Visibility.OMNISCIENT if omniscient else Visibility.PUBLIC,
+        show_suits=show_suits,
+    )
+
+
+DEFAULT_STYLE = ConsoleStyle()
+"""Public commentary without suits: what a command prints unless asked otherwise.
+
+A module constant rather than a call in a default argument. The style is frozen,
+so one shared instance is safe.
+"""
+
+
+def card_text(card: Card, style: ConsoleStyle = DEFAULT_STYLE) -> str:
     """Render one card compactly.
 
     Deliberately ASCII -- ``Th`` rather than a suit symbol -- because this goes
@@ -112,24 +176,31 @@ def card_text(card: Card) -> str:
 
     Args:
         card: The card to render.
+        style: Presentation settings; only :attr:`ConsoleStyle.show_suits` is
+            read.
 
     Returns:
-        Rank and suit initial, such as ``7d`` or ``Ts``, or ``JK`` for a joker.
+        The rank alone, such as ``7`` or ``T``; the rank and its suit initial,
+        such as ``7d``, when suits are shown; and ``JK`` for a joker either way,
+        since a joker has no suit.
     """
     label = RANK_TEXT[card.rank]
-    return label if card.suit is None else f"{label}{card.suit.value[0]}"
+    if card.suit is None or not style.show_suits:
+        return label
+    return f"{label}{card.suit.value[0]}"
 
 
-def _cards_text(cards: Iterable[Card]) -> str:
+def _cards_text(cards: Iterable[Card], style: ConsoleStyle) -> str:
     """Render a run of cards.
 
     Args:
         cards: The cards, in the order they should be read.
+        style: Presentation settings.
 
     Returns:
         The rendered cards separated by spaces.
     """
-    return " ".join(card_text(card) for card in cards)
+    return " ".join(card_text(card, style) for card in cards)
 
 
 def _count_text(count: int, noun: str) -> str:
@@ -145,7 +216,7 @@ def _count_text(count: int, noun: str) -> str:
     return f"{count} {noun}" if count == 1 else f"{count} {noun}s"
 
 
-def _private_text(count: int, cards: tuple[Card, ...] | None, visibility: Visibility) -> str:
+def _private_text(count: int, cards: tuple[Card, ...] | None, style: ConsoleStyle) -> str:
     """Render the cards of a private event, or only how many there were.
 
     This is the single place a hidden identity can reach the console, which is
@@ -155,29 +226,29 @@ def _private_text(count: int, cards: tuple[Card, ...] | None, visibility: Visibi
         count: How many cards the event moved; public either way.
         cards: The identities, or ``None`` in an event already filtered for
             somebody who may not know them.
-        visibility: How much the console may show.
+        style: Presentation settings; the visibility decides the outcome here.
 
     Returns:
         The count alone, or the count and the cards.
     """
     counted = _count_text(count, "card")
-    if visibility is Visibility.PUBLIC or cards is None:
+    if style.visibility is Visibility.PUBLIC or cards is None:
         return counted
-    return f"{counted}: {_cards_text(cards)}"
+    return f"{counted}: {_cards_text(cards, style)}"
 
 
-def describe_event(event: ObservedEvent, visibility: Visibility = Visibility.PUBLIC) -> str:
+def describe_event(event: ObservedEvent, style: ConsoleStyle = DEFAULT_STYLE) -> str:
     """Describe one event as a line of commentary.
 
-    Only the two private events read ``visibility`` at all: everything else here
+    Only the two private events read the visibility at all: everything else here
     was public when it happened. An event that was already filtered keeps its
     identities hidden even under :attr:`Visibility.OMNISCIENT`, because they are
     genuinely not in it.
 
     Args:
         event: A full internal event.
-        visibility: How much of it to show. The default is what an onlooker at
-            the table would have seen.
+        style: Presentation settings. The default shows what an onlooker at the
+            table would have seen, without suits.
 
     Returns:
         One line describing what happened.
@@ -185,23 +256,25 @@ def describe_event(event: ObservedEvent, visibility: Visibility = Visibility.PUB
     match event:
         case GameStarted(dealer=dealer, seat_order=seats, players=players):
             shown = ", ".join(
-                f"player {public.player} shows {_cards_text(public.face_up)}" for public in players
+                f"player {public.player} shows {_cards_text(public.face_up, style)}"
+                for public in players
             )
             return f"player {dealer} deals to {len(seats)} seats; {shown}"
         case HandDealt(player=player, count=count, cards=cards):
-            return f"player {player} is dealt {_private_text(count, cards, visibility)}"
+            return f"player {player} is dealt {_private_text(count, cards, style)}"
         case ArrangementCommitted(player=player, face_up=face_up):
-            return f"player {player} settles on {_cards_text(face_up)} face up"
+            return f"player {player} settles on {_cards_text(face_up, style)} face up"
         case CardsPlayed(player=player, source=source, cards=cards):
-            return f"player {player} plays {_cards_text(cards)} from {source.value}"
+            return f"player {player} plays {_cards_text(cards, style)} from {source.value}"
         case CardRevealed(player=player, slot=slot, card=card, playable=playable):
             verdict = "playable" if playable else "not playable"
-            return f"player {player} reveals {card_text(card)} in slot {slot}: {verdict}"
+            return f"player {player} reveals {card_text(card, style)} in slot {slot}: {verdict}"
         case CardsDrawn(player=player, count=count, cards=cards):
-            return f"player {player} draws {_private_text(count, cards, visibility)}"
+            return f"player {player} draws {_private_text(count, cards, style)}"
         case PilePickedUp(player=player, cards=cards):
             return (
-                f"player {player} picks up {_count_text(len(cards), 'card')}: {_cards_text(cards)}"
+                f"player {player} picks up {_count_text(len(cards), 'card')}: "
+                f"{_cards_text(cards, style)}"
             )
         case PileBurned(player=player, cards=cards, reason=reason):
             return f"player {player} burns {_count_text(len(cards), 'card')} ({reason.value})"
@@ -209,19 +282,17 @@ def describe_event(event: ObservedEvent, visibility: Visibility = Visibility.PUB
             return f"player {outcome.winner} wins"
 
 
-def narrate(
-    events: Iterable[ObservedEvent], visibility: Visibility = Visibility.PUBLIC
-) -> list[str]:
+def narrate(events: Iterable[ObservedEvent], style: ConsoleStyle = DEFAULT_STYLE) -> list[str]:
     """Describe a run of events as commentary.
 
     Args:
         events: Full internal events in resolution order.
-        visibility: How much of them to show.
+        style: Presentation settings.
 
     Returns:
         One line per event, in the same order.
     """
-    return [describe_event(event, visibility) for event in events]
+    return [describe_event(event, style) for event in events]
 
 
 def describe_constraint(constraint: PlayConstraint) -> str:
@@ -254,20 +325,23 @@ def _by_id(deck: Iterable[Card]) -> dict[int, Card]:
     return {int(card.id): card for card in deck}
 
 
-def _zone_text(identifiers: Iterable[int], cards: dict[int, Card]) -> str:
+def _zone_text(identifiers: Iterable[int], cards: dict[int, Card], style: ConsoleStyle) -> str:
     """Render one zone of a position.
 
     Args:
         identifiers: Card identifiers in their stored order.
         cards: Index built by :func:`_by_id`.
+        style: Presentation settings.
 
     Returns:
         The rendered cards, or ``-`` for an empty zone.
     """
-    return " ".join(card_text(cards[identifier]) for identifier in identifiers) or "-"
+    return " ".join(card_text(cards[identifier], style) for identifier in identifiers) or "-"
 
 
-def describe_position(position: FinalPosition, deck: Iterable[Card]) -> list[str]:
+def describe_position(
+    position: FinalPosition, deck: Iterable[Card], style: ConsoleStyle = DEFAULT_STYLE
+) -> list[str]:
     """Describe an authoritative position in full, hidden cards included.
 
     This is the omniscient counterpart to :func:`describe_event`: where the
@@ -278,6 +352,8 @@ def describe_position(position: FinalPosition, deck: Iterable[Card]) -> list[str
     Args:
         position: The digest to describe.
         deck: The recorded deck, which resolves the digest's identifiers.
+        style: Presentation settings; only the card spelling is read, since a
+            position is printed at all only when the operator asked for it.
 
     Returns:
         One header line, three lines for the shared piles, and one line per
@@ -293,18 +369,22 @@ def describe_position(position: FinalPosition, deck: Iterable[Card]) -> list[str
         f"position: {position.phase.value} | ply {position.current_ply} | to act: {actor} | "
         f"constraint: {describe_constraint(position.constraint)}",
         f"  draw pile ({len(position.draw_pile)}, next draw last): "
-        f"{_zone_text(position.draw_pile, cards)}",
-        f"  discard ({len(position.discard_pile)}): {_zone_text(position.discard_pile, cards)}",
-        f"  burned ({len(position.burned_cards)}): {_zone_text(position.burned_cards, cards)}",
+        f"{_zone_text(position.draw_pile, cards, style)}",
+        f"  discard ({len(position.discard_pile)}): "
+        f"{_zone_text(position.discard_pile, cards, style)}",
+        f"  burned ({len(position.burned_cards)}): "
+        f"{_zone_text(position.burned_cards, cards, style)}",
     ]
     for player in position.players:
         face_down = (
-            " ".join(f"{slot}={card_text(cards[card_id])}" for slot, card_id in player.face_down)
+            " ".join(
+                f"{slot}={card_text(cards[card_id], style)}" for slot, card_id in player.face_down
+            )
             or "-"
         )
         lines.append(
-            f"  player {player.player}: hand {_zone_text(player.hand, cards)} | "
-            f"face up {_zone_text(player.face_up, cards)} | face down {face_down}"
+            f"  player {player.player}: hand {_zone_text(player.hand, cards, style)} | "
+            f"face up {_zone_text(player.face_up, cards, style)} | face down {face_down}"
         )
     return lines
 

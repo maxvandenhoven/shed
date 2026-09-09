@@ -11,12 +11,14 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from shed.agents import AgentSpec
 from shed.cli import (
+    ConsoleStyle,
     Visibility,
     build_lineup,
     card_text,
@@ -32,6 +34,7 @@ from shed.cli import (
 from shed.engine import (
     AtLeast,
     AtMost,
+    Card,
     CardsDrawn,
     HandDealt,
     PlayConstraint,
@@ -48,6 +51,12 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
 QUICK_MATCH = ("--seconds-per-turn", "0.5", "--max-play-decisions", "8")
 """Options that keep a real timed match in the test suite short."""
+
+OMNISCIENT = ConsoleStyle(visibility=Visibility.OMNISCIENT)
+"""Everything the record holds, with cards spelled by rank alone."""
+
+SUITED = ConsoleStyle(show_suits=True)
+"""Public commentary, with every card carrying its suit."""
 
 
 def run_script(name: str, *arguments: str) -> subprocess.CompletedProcess[str]:
@@ -148,12 +157,15 @@ class TestNarration:
     def test_private_identities_never_reach_the_console(
         self, event: HandDealt | CardsDrawn
     ) -> None:
-        """A dealt or drawn card is reported by count, exactly as opponents see it."""
-        line = describe_event(event)
-        assert "cards" in line
-        cards = event.cards
-        assert cards is not None
-        assert all(card_text(card) not in line for card in cards)
+        """A dealt or drawn card is reported by count, exactly as opponents see it.
+
+        The public line has to equal the line for the same event with its
+        identities already stripped. Hunting for a rendered card as a substring
+        would not do: a bare rank can be the count's own digit.
+        """
+        redacted = replace(event, cards=None)
+        assert describe_event(event) == describe_event(redacted)
+        assert describe_event(event, OMNISCIENT) != describe_event(redacted, OMNISCIENT)
 
     @pytest.mark.parametrize(
         "event",
@@ -165,7 +177,7 @@ class TestNarration:
     )
     def test_omniscient_narration_names_them(self, event: HandDealt | CardsDrawn) -> None:
         """The opt-in view prints exactly the identities the default withholds."""
-        line = describe_event(event, Visibility.OMNISCIENT)
+        line = describe_event(event, OMNISCIENT)
         cards = event.cards
         assert cards is not None
         assert all(card_text(card) in line for card in cards)
@@ -173,18 +185,61 @@ class TestNarration:
     def test_a_filtered_event_stays_hidden_even_when_omniscient(self) -> None:
         """Identities a record does not hold cannot be printed from it."""
         filtered = HandDealt(player=PlayerId(0), count=3, cards=None)
-        assert describe_event(filtered, Visibility.OMNISCIENT) == "player 0 is dealt 3 cards"
+        assert describe_event(filtered, OMNISCIENT) == "player 0 is dealt 3 cards"
 
     def test_public_narration_is_the_default(self) -> None:
         """Nothing leaks by omission: the careful setting is the one you get."""
         event = HandDealt(player=PlayerId(0), count=3, cards=DECK[:3])
-        assert describe_event(event) == describe_event(event, Visibility.PUBLIC)
-        assert narrate([event]) == narrate([event], Visibility.PUBLIC)
+        assert describe_event(event) == describe_event(event, ConsoleStyle())
+        assert narrate([event]) == narrate([event], ConsoleStyle())
 
     def test_public_cards_are_named(self) -> None:
-        """Cards everybody can see are shown, because that is the point of a summary."""
-        played = next(line for line in narrate(sample_events()) if "plays" in line)
-        assert card_text(DECK[0]) in played
+        """Cards everybody can see are shown, because that is the point of a summary.
+
+        Asserted with suits on, where ``2c`` cannot be confused with a count.
+        """
+        played = next(line for line in narrate(sample_events(), SUITED) if "plays" in line)
+        assert card_text(DECK[0], SUITED) in played
+
+
+class TestCardSpelling:
+    """How a card is written, which is independent of what may be shown."""
+
+    @pytest.mark.parametrize(
+        ("card", "bare", "suited"),
+        [
+            (DECK[0], "2", "2c"),
+            (DECK[8], "T", "Tc"),
+            (DECK[50], "K", "Ks"),
+            (DECK[53], "JK", "JK"),
+        ],
+        ids=["two", "ten", "king", "joker"],
+    )
+    def test_suits_are_appended_only_when_asked_for(
+        self, card: Card, bare: str, suited: str
+    ) -> None:
+        """Rank alone by default; a joker has no suit to add either way."""
+        assert card_text(card) == bare
+        assert card_text(card, SUITED) == suited
+
+    def test_the_spelling_is_independent_of_the_visibility(self) -> None:
+        """The two settings compose: either can be on without the other."""
+        event = HandDealt(player=PlayerId(0), count=2, cards=(DECK[8], DECK[50]))
+        both = ConsoleStyle(visibility=Visibility.OMNISCIENT, show_suits=True)
+
+        assert describe_event(event, OMNISCIENT) == "player 0 is dealt 2 cards: T K"
+        assert describe_event(event, both) == "player 0 is dealt 2 cards: Tc Ks"
+        assert describe_event(event, SUITED) == "player 0 is dealt 2 cards"
+
+    def test_a_position_follows_the_same_spelling(self) -> None:
+        """One style reaches every renderer, the position dump included."""
+        result = sync_match(max_play_decisions=6)
+        deck = match_deck(result.metadata)
+        bare = describe_position(result.final_position, deck, OMNISCIENT)
+        suited = describe_position(result.final_position, deck, ConsoleStyle(show_suits=True))
+
+        assert "face down 0=" in bare[4]
+        assert len(suited[4]) > len(bare[4])
 
 
 class TestPositions:

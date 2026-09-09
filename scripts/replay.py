@@ -26,7 +26,8 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from shed.cli import (
-    Visibility,
+    ConsoleStyle,
+    console_style,
     describe_position,
     narrate,
     replay_summary,
@@ -59,25 +60,30 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="print the actions with hidden identities, and the final position",
     )
+    parser.add_argument(
+        "--show-suit",
+        action="store_true",
+        help="spell cards with their suit (Jc) instead of the rank alone (J)",
+    )
     return parser
 
 
-def _print_recording(replay: Replay, *, omniscient: bool) -> None:
+def _print_recording(replay: Replay, style: ConsoleStyle) -> None:
     """Print the recorded match as commentary.
 
     Args:
         replay: The decoded replay.
-        omniscient: Whether to show the identities the file holds and the
-            position the match stopped in. By default private events are
-            printed by count alone.
+        style: How much to show, and how to spell a card. By default private
+            events are printed by count alone and the position is left out,
+            even though the file holds both.
     """
     events = list(replay.initial_events)
     for decision in replay.decisions:
         events.extend(decision.events)
-    print("\n".join(narrate(events, Visibility.OMNISCIENT if omniscient else Visibility.PUBLIC)))
+    print("\n".join(narrate(events, style)))
     print()
-    if omniscient:
-        print("\n".join(describe_position(replay.final_position, replay.deck)))
+    if style.omniscient:
+        print("\n".join(describe_position(replay.final_position, replay.deck, style)))
         print()
 
 
@@ -103,7 +109,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
 
     if args.events or args.omniscient:
-        _print_recording(replay, omniscient=args.omniscient)
+        _print_recording(
+            replay, console_style(omniscient=args.omniscient, show_suits=args.show_suit)
+        )
     print("\n".join(replay_summary(replay)))
 
     if not args.verify:

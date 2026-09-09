@@ -255,22 +255,22 @@ in, face-down slots and undrawn deck included.
 
 ```
 $ uv run scripts/play.py --agents random greedy --seed 42 --max-play-decisions 10 --omniscient
-player 0 deals to 2 seats; player 0 shows 7c Tc 6s, player 1 shows 8c 3d Th
-player 1 is dealt 3 cards: 4c Kh 5s
-player 0 is dealt 3 cards: 2d 3h As
-player 1 settles on 8c Th Kh face up
-player 1 plays 3d from hand
-player 1 draws 1 card: Ks
+player 0 deals to 2 seats; player 0 shows 7 T 6, player 1 shows 8 3 T
+player 1 is dealt 3 cards: 4 K 5
+player 0 is dealt 3 cards: 2 3 A
+player 1 settles on 8 T K face up
+player 1 plays 3 from hand
+player 1 draws 1 card: K
 …
-player 0 plays Tc from hand
+player 0 plays T from hand
 player 0 burns 8 cards (ten)
 
 position: play | ply 10 | to act: player 0 | constraint: at least 5
-  draw pile (26, next draw last): 2s Td 7s 6h 8d Js 5d 7h 4h Jc Kc Qd 5h Qs 9h …
-  discard (2): 7d 5s
-  burned (8): 3d 6s Ks 2d 4c 8h Ah Tc
-  player 0: hand Ac JK 9s | face up 7c 3h As | face down 0=9c 1=Ts 2=4d
-  player 1: hand 2h Jh Ad | face up 8c Th Kh | face down 0=3s 1=3c 2=6d
+  draw pile (26, next draw last): 2 T 7 6 8 J 5 7 4 J K Q 5 Q 9 5 9 8 6 JK Q Q J 4 K 2
+  discard (2): 7 5
+  burned (8): 3 6 K 2 4 8 A T
+  player 0: hand A JK 9 | face up 7 3 A | face down 0=9 1=T 2=4
+  player 1: hand 2 J A | face up 8 T K | face down 0=3 1=3 2=6
 ```
 
 That is the view for reading back *why* an agent played what it did. It is
@@ -281,6 +281,11 @@ view is redaction applied on the way to the terminal, and `--omniscient` simply
 declines to apply it. Nothing about what an agent is *given* changes: a strategy
 sees a `PlayerView`, which never contains another seat's cards whatever the
 operator asked to print.
+
+Cards are spelled by rank alone, because a suit decides nothing in `shed-v1` and
+`J J 7` reads better than `Jc Jd 7h`. Both commands take `--show-suit` when you
+do want them — tracking one physical card through a pickup, say. The suits are
+in the replay file either way; this only changes the spelling on your terminal.
 
 Two commands from the specification belong to the next milestone and do not
 exist yet:

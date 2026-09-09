@@ -34,9 +34,10 @@ from pathlib import Path
 
 from shed.agents import AGENT_KINDS
 from shed.cli import (
-    Visibility,
+    ConsoleStyle,
     agent_kinds_help,
     build_lineup,
+    console_style,
     describe_position,
     match_summary,
     narrate,
@@ -104,26 +105,32 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="show hidden identities in the action log and print the final position",
     )
+    parser.add_argument(
+        "--show-suit",
+        action="store_true",
+        help="spell cards with their suit (Jc) instead of the rank alone (J)",
+    )
     return parser
 
 
-def _report(result: MatchResult, *, quiet: bool, omniscient: bool) -> None:
+def _report(result: MatchResult, style: ConsoleStyle, *, quiet: bool) -> None:
     """Print one match to the console.
 
     Args:
         result: The match to report.
-        quiet: Whether to leave out the action log.
-        omniscient: Whether to show what the players could not see.
+        style: How much to show, and how to spell a card.
+        quiet: Whether to leave out the action log. The position block and the
+            summary are printed either way.
     """
-    visibility = Visibility.OMNISCIENT if omniscient else Visibility.PUBLIC
     if not quiet:
         events = list(result.initial_events)
         for decision in result.decisions:
             events.extend(decision.events)
-        print("\n".join(narrate(events, visibility)))
+        print("\n".join(narrate(events, style)))
         print()
-    if omniscient:
-        print("\n".join(describe_position(result.final_position, match_deck(result.metadata))))
+    if style.omniscient:
+        deck = match_deck(result.metadata)
+        print("\n".join(describe_position(result.final_position, deck, style)))
         print()
     print("\n".join(match_summary(result)))
 
@@ -168,7 +175,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"error: cannot write {args.output}: {error}", file=sys.stderr)
             return 1
 
-    _report(result, quiet=args.quiet, omniscient=args.omniscient)
+    style = console_style(omniscient=args.omniscient, show_suits=args.show_suit)
+    _report(result, style, quiet=args.quiet)
     if written is not None:
         print(f"replay: {written}")
 
