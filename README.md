@@ -22,7 +22,8 @@ The engine is being built in milestones. What exists today:
 | Agent interface, `AgentSpec`, and the built-in factory | Implemented |
 | Random and greedy baselines across every phase | Implemented |
 | Timed match runner: selection policy, spawned workers, records | Implemented |
-| Replay format, gauntlet, scripts | Not started |
+| Versioned JSON replay, replay verification, `play` and `replay` commands | Implemented |
+| Gauntlet, `gauntlet` and `benchmark` commands | Not started |
 
 The engine works on strictly typed domain objects: constructors take a `Rank`,
 not an integer they convert into one, and check domain invariants only — `ty`
@@ -146,6 +147,48 @@ cutting worker startup from about 120 ms to about 14 ms, because the server has
 parent assigns after import is visible to a plain `fork` child and invisible to a
 real worker.
 
+A finished match is written as versioned JSON, and read back through the only
+serialization boundary the project has. `shed.replay` holds every encoder and
+decoder; the engine, the agents, and the runner never see JSON, and nothing they
+own imports this module:
+
+```python
+from pathlib import Path
+
+from shed.replay import read_replay, verify_replay, write_match
+
+write_match(result, Path("results/match.json"))
+replay = read_replay(Path("results/match.json"))  # validates before it decodes
+check = verify_replay(replay)
+check.ok, check.applied, check.outcome  # True, 58, Outcome(winner=1)
+```
+
+Encoding and decoding are deliberately asymmetric. Encoding takes typed records
+and writes explicit tags — a move is `{"type": "play", "source": "hand",
+"rank": 7, "count": 2}`, never a pickled object. Decoding takes a document that
+merely *claims* to be a replay, and settles every external question before a
+domain object exists: the schema and rules profile it targets, the shape of each
+record, the tag of each union, and the primitive type of each field. A JSON
+boolean is not an integer here, even though Python says it is, so `"count": true`
+is refused rather than played as a one. The engine's constructors then take real
+`Rank`, `Suit`, and identifier values and check only their own invariants.
+
+Verification replays the recording: it deals the recorded deck order with the
+same pure helper the runner deals with, applies each recorded move through
+`GameState.apply_move()`, and compares the resolved events, the outcome, and a
+digest of the final position. No agent is built and no worker is started, so a
+replay is deterministic even though the timed match that produced it was not —
+and the original budgets are irrelevant to it. A move the engine now refuses, a
+tampered event stream, or a position that does not match come back as reported
+problems, not as an exception. Truncated and aborted matches replay too: a
+selection that was chosen but never applied stays out of the applied stream, so
+a replay can never play a move the match did not.
+
+A complete replay file holds hidden information — every face-down identity, the
+deck order, and each private draw — and is a trusted post-match artifact. The
+console output is the opposite: `describe_event` reports private events by their
+public count, so summarizing a replay never dumps what the players could not see.
+
 ## Requirements
 
 - [uv](https://docs.astral.sh/uv/) (manages the Python 3.12 toolchain, the
@@ -179,20 +222,83 @@ The review gates are the same commands with `ruff format --check .` in place of
 | `src/shed/engine/` | Value types, events, and state with the game operations |
 | `src/shed/agents/` | Agent interface, specification, factory, and the baselines |
 | `src/shed/match.py` | Timed decisions: selection policy, worker, pipe context, runner |
+| `src/shed/replay.py` | Versioned JSON replay: the whole codec, and verification |
+| `src/shed/cli.py` | Shared command-line logic: lineups, narration, summaries |
 | `tests/` | pytest suite |
-| `scripts/` | Command-line entry points (none yet) |
+| `scripts/` | Command-line entry points: `play.py`, `replay.py` |
 | `docs/implementation.md` | Implementation specification |
 | `results/` | Generated local outputs, ignored by Git |
 
-## Planned commands (not implemented)
+## Commands
 
-The specification defines these interfaces for later milestones. They do not
-exist yet and will fail if run:
+Play one match and save its replay, then verify that the replay reproduces it:
 
 ```bash
-uv run scripts/play.py --agents random greedy --seed 42 --output results/match.json
-uv run scripts/gauntlet.py --agents random greedy --deals 100 --seed 42 --output results/gauntlet.json
+uv run scripts/play.py --agents random greedy --seed 42 --seconds-per-turn 2 --output results/match.json
 uv run scripts/replay.py results/match.json --verify
+```
+
+`play.py` prints the public actions and the outcome, and exits nonzero only when
+a match aborts — a truncated match is a limit being reached, not a failure.
+`--quiet` drops the action log, `--strict-failures` aborts on any agent failure,
+and `--dealer`, `--max-play-decisions`, `--agent-seed`, and `--fallback-seed`
+expose the rest of the runner's configuration. `replay.py` summarizes a saved
+file, adds the recorded actions with `--events`, and with `--verify` replays it;
+it exits `1` when verification fails and `2` when the file cannot be read or is
+not a replay this release supports.
+
+### Watching a match with full information
+
+Both commands take `--omniscient`, which prints what the players could not see:
+the dealt hands, every replenishment draw, and the position the match stopped
+in, face-down slots and undrawn deck included.
+
+```
+$ uv run scripts/play.py --agents random greedy --seed 42 --max-play-decisions 10 --omniscient
+player 0 deals to 2 seats; player 0 shows 6 7 10, player 1 shows 3 8 10
+player 1 is dealt 3 cards: 4 5 K
+player 0 is dealt 3 cards: 2 3 A
+player 1 settles on 8 10 K face up
+player 1 plays 3 from hand
+player 1 draws 1 card: K
+…
+player 0 plays 10 from hand
+player 0 burns 8 cards (ten)
+
+position: play | ply 10 | to act: player 0 | constraint: at least 5
+  draw pile (26, next draw last): 2 10 7 6 8 J 5 7 4 J K Q 5 Q 9 5 9 8 6 JK Q Q J 4 K 2
+  discard (2): 7 5
+  burned (8): 2 3 4 6 8 10 K A
+  player 0: hand 9 A JK | face up 3 7 A | face down 0=9 1=10 2=4
+  player 1: hand 2 J A | face up 8 10 K | face down 0=3 1=3 2=6
+```
+
+That is the view for reading back *why* an agent played what it did. It is
+orthogonal to `--quiet`: together they print the position and the summary and no
+action log. It is also purely a console setting. Events always carry their
+identities — a runner records them and a replay file stores them — so the public
+view is redaction applied on the way to the terminal, and `--omniscient` simply
+declines to apply it. Nothing about what an agent is *given* changes: a strategy
+sees a `PlayerView`, which never contains another seat's cards whatever the
+operator asked to print.
+
+Cards are spelled by rank alone, because a suit decides nothing in `shed-v1` and
+`J J 7` reads better than `Jc Jd 7h`. Both commands take `--show-suit` when you
+do want them — tracking one physical card through a pickup, say. The suits are
+in the replay file either way; this only changes the spelling on your terminal.
+
+Every group of cards is printed in reading order — by rank, with the card
+identifier breaking ties so it stays deterministic and keeps one rank's suits
+together. The two exceptions are the discard and draw piles, which are printed
+exactly as stored, because position decides what happens next in both. Sorting
+is presentation only: the engine's orders are untouched and a replay still
+compares them exactly, so a wrong one cannot hide behind a tidy console.
+
+Two commands from the specification belong to the next milestone and do not
+exist yet:
+
+```bash
+uv run scripts/gauntlet.py --agents random greedy --deals 100 --seed 42 --output results/gauntlet.json
 uv run scripts/benchmark.py --iterations 10000
 ```
 
