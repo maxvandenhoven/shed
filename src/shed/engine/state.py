@@ -13,12 +13,15 @@ without depending on the shuffle implementation staying byte-for-byte stable.
 
 Dependencies point one way: :mod:`shed.engine.types` defines the value types,
 :mod:`shed.engine.events` records what happened using those types, and this
-module builds state and operations on both.
+module builds state and operations on both. Nothing here imports agents, clocks,
+processes, or serialization.
 
-Milestone status: everything up to the opening PLAY position is implemented.
-Ordinary PLAY resolution -- transferring a batch, resolving reveals, burns,
-pickups, refills, and termination -- is the remaining engine work, and
-:meth:`GameState.apply_move` refuses that path explicitly.
+A decision is atomic. :meth:`GameState.apply_move` validates the move, snapshots
+the position, then resolves the whole chain -- transfer or reveal, burn or rank
+effect, pickup, replenishment, termination, and the next actor -- before
+returning. Any failure inside that boundary, including the closing invariant
+check, restores the snapshot, so a caller only ever sees the position before the
+decision or the position after it completes.
 """
 
 from __future__ import annotations
@@ -32,10 +35,17 @@ from itertools import combinations
 
 from shed.engine.events import (
     ArrangementCommitted,
+    BurnReason,
+    CardRevealed,
+    CardsDrawn,
+    CardsPlayed,
     Decision,
+    GameEnded,
     GameStarted,
     HandDealt,
     ObservedEvent,
+    PileBurned,
+    PilePickedUp,
     Transition,
     UndoRecord,
 )
@@ -80,6 +90,9 @@ __all__ = [
 
 _ALWAYS_PLAYABLE: frozenset[Rank] = frozenset({Rank.TWO, Rank.NINE, Rank.TEN, Rank.JOKER})
 """Ranks exempt from the current constraint, checked before any comparison."""
+
+_BURN_BATCH_SIZE = 4
+"""Batch size that burns the pile when played in one action."""
 
 _OPENING_RANK_ORDER: tuple[Rank, ...] = (
     Rank.THREE,
@@ -128,6 +141,61 @@ def can_play_rank(rank: Rank, constraint: PlayConstraint) -> bool:
         case AtMost(rank=maximum):
             return rank <= maximum
     raise ValueError(f"Unknown play constraint {constraint!r}")
+
+
+def _burn_reason(rank: Rank, count: int) -> BurnReason | None:
+    """Report which rule, if any, burns the pile after a successful play.
+
+    A ten burns whatever the batch size, and four cards of one rank burn when
+    they are played in a *single* action; four equal ranks that merely
+    accumulated across separate actions never burn. When both apply the ten is
+    recorded, as the profile requires.
+
+    Args:
+        rank: Rank just played, or the rank of a successfully revealed card.
+        count: Cards in that single batch; a reveal is always one.
+
+    Returns:
+        The burn reason, or ``None`` when the pile survives.
+    """
+    if rank is Rank.TEN:
+        return BurnReason.TEN
+    if count == _BURN_BATCH_SIZE:
+        return BurnReason.FOUR_OF_A_KIND
+    return None
+
+
+def _constraint_after(rank: Rank, current: PlayConstraint) -> PlayConstraint:
+    """Return the constraint a successful, non-burning play leaves behind.
+
+    The seven restriction lives in the constraint rather than in a countdown of
+    players, so a transparent nine simply preserves whatever is already there:
+    seven then nine still demands at most a seven, while seven then five leaves
+    at least a five.
+
+    Args:
+        rank: Rank just played or revealed. A ten never reaches here because it
+            always burns.
+        current: Constraint in force before this play.
+
+    Returns:
+        The constraint the next ordinary rank must satisfy.
+
+    Raises:
+        StateInvariantError: If a ten reaches here, which means burn resolution
+            was skipped.
+    """
+    match rank:
+        case Rank.TEN:
+            raise StateInvariantError("A ten always burns; it never sets a constraint")
+        case Rank.NINE:
+            return current
+        case Rank.JOKER:
+            return Unrestricted()
+        case Rank.SEVEN:
+            return AtMost(Rank.SEVEN)
+        case _:
+            return AtLeast(rank)
 
 
 def _by_id(cards: Iterable[Card]) -> tuple[Card, ...]:
@@ -524,11 +592,8 @@ class GameState:
         Raises:
             IllegalMoveError: If the move is out of phase or is not among the
                 actor's current legal moves.
-            NotImplementedError: For every PLAY decision. Ordinary play
-                resolution is the remaining engine work; the path is refused
-                explicitly rather than reported as a successful transition.
             StateInvariantError: If the state is not at a valid decision
-                boundary.
+                boundary, or resolution left it in one that is not.
         """
         if self.phase is Phase.FINISHED:
             raise IllegalMoveError("The game has finished; no move can be applied")
@@ -543,15 +608,12 @@ class GameState:
             )
         canonical = legal[legal.index(move)]
 
-        if self.phase is not Phase.SETUP:
-            raise NotImplementedError(
-                "PLAY resolution is not implemented yet: milestone 2 covers setup, "
-                "observations, and legal-move generation only"
-            )
-
         undo = UndoRecord(before=deepcopy(self))
         try:
-            events = self._commit_arrangement(actor, canonical)
+            if self.phase is Phase.SETUP:
+                events = self._commit_arrangement(actor, canonical)
+            else:
+                events = self._resolve_play(actor, canonical)
             # The postcondition is part of the transition: a state that fails it
             # must be rolled back too, not left half-applied behind an error.
             validate_decision_boundary(self)
@@ -642,6 +704,191 @@ class GameState:
                 if any(card.rank is rank for card in self.players[seat].hand):
                     return seat
         raise StateInvariantError("No player holds a card after arrangement")
+
+    def _resolve_play(self, actor: PlayerId, move: Move) -> tuple[ObservedEvent, ...]:
+        """Resolve one PLAY decision completely, in physical order.
+
+        The chain is fixed: move the cards, resolve a burn or the rank's effect
+        (or the pickup that replaces both), replenish the actor's hand, count the
+        ply, then either end the game or schedule the actor chosen earlier. The
+        win check deliberately runs after replenishment, so shedding a last hand
+        card while the deck can still refill does not finish anybody, and a
+        burning last card wins instead of granting the retained turn.
+
+        Args:
+            actor: The deciding player.
+            move: The already validated decision.
+
+        Returns:
+            The full events in resolution order, identities intact.
+
+        Raises:
+            StateInvariantError: If a non-PLAY move reaches here, or the actor
+                cannot supply the batch their own legal move named.
+        """
+        player = self.players[actor]
+        events: list[ObservedEvent] = []
+
+        match move:
+            case Play(source=source, rank=rank, count=count):
+                batch = self._take_batch(actor, source, rank, count)
+                self.discard_pile.extend(batch)
+                events.append(CardsPlayed(player=actor, source=source, cards=batch))
+                next_actor = self._resolve_pile(actor, rank, count, events)
+            case Reveal(slot=slot):
+                # Legality was decided before the reveal, so the pre-reveal
+                # constraint is still the one this card must satisfy.
+                card = player.face_down.pop(slot)
+                playable = can_play_rank(card.rank, self.constraint)
+                events.append(CardRevealed(player=actor, slot=slot, card=card, playable=playable))
+                if playable:
+                    self.discard_pile.append(card)
+                    next_actor = self._resolve_pile(actor, card.rank, 1, events)
+                else:
+                    self._collect_pile(actor, extra=card, events=events)
+                    next_actor = self._next_seat(actor)
+            case PickUp():
+                self._collect_pile(actor, extra=None, events=events)
+                next_actor = self._next_seat(actor)
+            case _:
+                raise StateInvariantError(f"PLAY resolved a non-play move {move!r}")
+
+        events.extend(self._refill(actor))
+        self.current_ply += 1
+        if player.remaining_count:
+            self.current_player = next_actor
+        else:
+            outcome = Outcome(winner=actor)
+            self.phase = Phase.FINISHED
+            self.outcome = outcome
+            self.current_player = None
+            events.append(GameEnded(outcome=outcome))
+        return tuple(events)
+
+    def _take_batch(
+        self, actor: PlayerId, source: Zone, rank: Rank, count: int
+    ) -> tuple[Card, ...]:
+        """Remove the physical cards a rank/count play names from one zone.
+
+        Suits never affect the outcome, so the engine picks the batch by
+        ascending card ID rather than asking the agent which physical cards it
+        meant. That keeps the action space small and the transition reproducible.
+
+        Args:
+            actor: The deciding player.
+            source: Zone to take from; hand or face-up.
+            rank: Rank shared by the batch.
+            count: How many cards to take.
+
+        Returns:
+            The removed cards in ascending card-ID order, which is also the
+            order they reach the pile.
+
+        Raises:
+            StateInvariantError: If the zone holds fewer cards of that rank than
+                the validated move claims.
+        """
+        player = self.players[actor]
+        zone = player.hand if source is Zone.HAND else player.face_up
+        batch = _by_id(card for card in zone if card.rank is rank)[:count]
+        if len(batch) != count:
+            raise StateInvariantError(
+                f"Player {actor} cannot supply {count} {rank.name} cards from {source.value}"
+            )
+        for card in batch:
+            zone.remove(card)
+        return batch
+
+    def _resolve_pile(
+        self, actor: PlayerId, rank: Rank, count: int, events: list[ObservedEvent]
+    ) -> PlayerId:
+        """Burn the pile or apply the rank's effect, and pick the next actor.
+
+        Args:
+            actor: The deciding player, whose cards are already on the pile.
+            rank: Rank just played or successfully revealed.
+            count: Cards played in this single action; a reveal is one.
+            events: Resolution log, appended to in place.
+
+        Returns:
+            Who should decide next if the game continues: the same actor after a
+            burn, otherwise the next seat clockwise.
+        """
+        reason = _burn_reason(rank, count)
+        if reason is None:
+            self.constraint = _constraint_after(rank, self.constraint)
+            return self._next_seat(actor)
+
+        burned = tuple(self.discard_pile)
+        self.burned_cards.extend(burned)
+        self.discard_pile.clear()
+        self.constraint = Unrestricted()
+        events.append(PileBurned(player=actor, cards=burned, reason=reason))
+        return actor
+
+    def _collect_pile(
+        self, actor: PlayerId, *, extra: Card | None, events: list[ObservedEvent]
+    ) -> None:
+        """Move the whole pile into the actor's hand and clear the constraint.
+
+        Shared by a forced pickup and a failed blind reveal; the reveal passes
+        the card it turned over, which joins the same transfer. The pile keeps
+        its play order and the failed card follows it, so the hand's order stays
+        deterministic even though nothing depends on it.
+
+        Args:
+            actor: The player taking the cards.
+            extra: A failed reveal's card, or ``None`` for an ordinary pickup.
+            events: Resolution log, appended to in place.
+        """
+        taken = tuple(self.discard_pile) if extra is None else (*self.discard_pile, extra)
+        self.discard_pile.clear()
+        self.players[actor].hand.extend(taken)
+        self.constraint = Unrestricted()
+        events.append(PilePickedUp(player=actor, cards=taken))
+
+    def _refill(self, actor: PlayerId) -> tuple[ObservedEvent, ...]:
+        """Replenish one hand to the profile's target while the deck lasts.
+
+        Drawing is automatic rather than an agent decision, and never removes
+        cards from a hand that already holds at least the target. Cards come off
+        the end of the draw pile, the draw position.
+
+        Args:
+            actor: The player to replenish.
+
+        Returns:
+            One private draw event, or nothing when no card was drawn.
+        """
+        hand = self.players[actor].hand
+        drawn: list[Card] = []
+        while len(hand) < self.rules.refill_target and self.draw_pile:
+            card = self.draw_pile.pop()
+            drawn.append(card)
+            hand.append(card)
+        if not drawn:
+            return ()
+        return (CardsDrawn(player=actor, count=len(drawn), cards=tuple(drawn)),)
+
+    def _next_seat(self, actor: PlayerId) -> PlayerId:
+        """Return the seat one step clockwise from ``actor``.
+
+        No seat is ever skipped: the profile has no eliminations, and the game
+        ends the moment its first player runs out of cards, so a live game never
+        contains a finished seat to pass over.
+
+        Args:
+            actor: The seat to advance from.
+
+        Returns:
+            The next seat in clockwise order.
+
+        Raises:
+            StateInvariantError: If the actor is not a seat in this game.
+        """
+        if actor not in self.seat_order:
+            raise StateInvariantError(f"Actor {actor} is not a seat in {self.seat_order}")
+        return self.seat_order[(self.seat_order.index(actor) + 1) % len(self.seat_order)]
 
     def _restore(self, snapshot: GameState) -> None:
         """Copy every field of ``snapshot`` back onto this object in place.

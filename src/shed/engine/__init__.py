@@ -12,11 +12,11 @@ types, ``events`` records what happened with them, and ``state`` builds the
 game on both -- and engine code imports from those modules directly rather than
 through this file.
 
-Milestone status: the deck, deterministic dealing, state and player views, the
-event vocabulary, legal-move generation, and the SETUP transition are
-implemented. Ordinary PLAY resolution is the remaining engine work, and
-``GameState.apply_move`` refuses PLAY decisions with ``NotImplementedError``
-rather than reporting a transition that did not happen.
+The deterministic engine is complete: the deck, dealing, setup, observations,
+legality, the full PLAY transition -- effects, burns, pickups, blind reveals,
+replenishment, and termination -- and snapshot undo for all of them. Timing,
+processes, agents, replay, and the gauntlet are separate layers built on top and
+are not part of this package.
 """
 
 from shed.engine.events import (

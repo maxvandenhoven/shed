@@ -4,9 +4,15 @@ The helpers here build crafted positions from the canonical deck. Every card a
 test uses is taken from one :class:`DeckPicker`, and whatever is left over is
 placed in the draw pile or the burned collection, so a crafted state always
 conserves all 54 physical cards and passes the decision-boundary invariants.
+
+:func:`play_seeded_game` is the tests' synchronous stand-in for the match runner:
+it selects among the engine's own legal moves with a seeded generator, with no
+timing, processes, or agents involved.
 """
 
+import random
 from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
 
 import pytest
 
@@ -17,6 +23,7 @@ from shed.engine import (
     CardId,
     GameState,
     Move,
+    ObservedEvent,
     Phase,
     Play,
     PlayConstraint,
@@ -325,3 +332,104 @@ def commit_unchanged(state: GameState) -> list[Transition]:
 def picker() -> DeckPicker:
     """Provide a fresh canonical-deck picker for one test."""
     return DeckPicker()
+
+
+DEFAULT_ACTION_LIMIT = 5_000
+"""Test-only bound on decisions in a seeded game; a truncation, never a draw."""
+
+
+def collect_cards(state: GameState) -> list[Card]:
+    """Gather every physical card the state holds, in no particular order.
+
+    Args:
+        state: Any state, valid or crafted.
+
+    Returns:
+        The cards found in the draw pile, the discard pile, the burned
+        collection, and every personal zone.
+    """
+    cards = [*state.draw_pile, *state.discard_pile, *state.burned_cards]
+    for seat in state.seat_order:
+        player = state.players[seat]
+        cards.extend(player.hand)
+        cards.extend(player.face_up)
+        cards.extend(player.face_down.values())
+    return cards
+
+
+def assert_cards_conserved(state: GameState) -> None:
+    """Assert the state still holds each of the 54 canonical cards exactly once.
+
+    Args:
+        state: The state to check.
+
+    Raises:
+        AssertionError: If a card is missing, duplicated, or invented.
+    """
+    found = sorted(collect_cards(state), key=lambda card: card.id)
+    assert found == list(build_deck()), "The 54 physical cards were not conserved"
+
+
+@dataclass(slots=True)
+class GameLog:
+    """What one synchronous seeded game produced.
+
+    Attributes:
+        transitions: Applied transitions in order, so the caller can undo LIFO.
+        events: Every full event emitted, in resolution order.
+        truncated: Whether the action bound stopped the game before it finished.
+            A truncated game has no winner and must never be reported as one.
+    """
+
+    transitions: list[Transition]
+    events: list[ObservedEvent]
+    truncated: bool
+
+
+def play_seeded_game(
+    state: GameState,
+    *,
+    seed: int,
+    action_limit: int = DEFAULT_ACTION_LIMIT,
+) -> GameLog:
+    """Play a whole game synchronously, choosing uniformly among legal moves.
+
+    This is the tests' stand-in for the match runner: no timing, no processes,
+    no agents, just a seeded generator picking from the tuple the engine offers.
+    Every decision is checked for the properties the engine promises -- a live
+    actor always has a move, the chosen move is accepted, card accounting holds,
+    and the ply counter advances exactly once per PLAY decision.
+
+    Args:
+        state: A live state, mutated in place until it finishes or truncates.
+        seed: Seed for the dedicated move-selection generator.
+        action_limit: Test-only bound on decisions, to keep a cyclic game from
+            running forever. Reaching it truncates the game.
+
+    Returns:
+        The log of what happened, including whether the bound was reached.
+
+    Raises:
+        AssertionError: If any per-decision property fails.
+    """
+    rng = random.Random(seed)
+    log = GameLog(transitions=[], events=[], truncated=False)
+
+    while not state.is_finished:
+        if len(log.transitions) >= action_limit:
+            log.truncated = True
+            break
+        moves = state.get_legal_moves()
+        assert moves, f"A live actor in phase {state.phase.value} was offered no move"
+        was_play = state.phase is Phase.PLAY
+        ply_before = state.current_ply
+
+        transition = state.apply_move(rng.choice(moves))
+
+        log.transitions.append(transition)
+        log.events.extend(transition.events)
+        assert_cards_conserved(state)
+        assert state.current_ply == ply_before + (1 if was_play else 0)
+
+    assert log.truncated or state.outcome is not None
+    return log
