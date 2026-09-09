@@ -423,7 +423,7 @@ class GameState:
 
 `get_legal_moves()` is the single legality implementation. It reads the actor's own cards, the public constraint, and the size of the draw pile straight from the state, and builds no observation: the dependency runs one way, from `observe()` to `get_legal_moves()`. This supersedes the earlier sketch in which the generator took a `PlayerView` and three wrappers delegated to it.
 
-`PlayerView` carries a `legal_moves: tuple[Move, ...]` field, populated by `observe()` with the actor's moves and left empty for every other viewer; agents read it directly rather than calling a method. This supersedes the earlier instruction to keep legal moves off the view. The field describes the state that was observed, and is not authority to mutate a later one: `apply_move()` always revalidates against the current position, so a stale tuple can only produce an `IllegalMoveError`. `TurnContext.legal_moves` can expose the runner's per-decision tuple to avoid repeated work in agents.
+`PlayerView` carries a `legal_moves: tuple[Move, ...]` field, populated by `observe()` with the actor's moves and left empty for every other viewer; agents read it directly rather than calling a method. This supersedes the earlier instruction to keep legal moves off the view. The field describes the state that was observed, and is not authority to mutate a later one: `apply_move()` always revalidates against the current position, so a stale tuple can only produce an `IllegalMoveError`. The view is the only place an agent reads legality from: the turn deliberately does not mirror the tuple, so there is one source of truth per decision.
 
 ### Generation algorithm
 
@@ -550,18 +550,21 @@ from typing import Protocol
 
 
 class TurnContext(Protocol):
-    @property
-    def legal_moves(self) -> tuple[Move, ...]: ...
-
     def remaining_seconds(self) -> float: ...
 
     def submit(self, move: Move, *, final: bool = False) -> None: ...
 
 
 class Agent(ABC):
+    def __init__(self, *, seed: int) -> None: ...
+
     @abstractmethod
     def think(self, view: PlayerView, turn: TurnContext) -> None: ...
 ```
+
+The turn is a channel and nothing more: submission plus a remaining-time query. Legal choices come from `view.legal_moves`, so the earlier sketch's `legal_moves` property on the turn is dropped rather than duplicating one tuple in two places. There is no acceptance acknowledgement, no `submit_final()` alias, and no parallel `choose_move()` interface. The base class owns only the agent's dedicated `random.Random`, because every strategy needs seeded tie-breaking and the factory always supplies a seed.
+
+Agents receive `PlayerView`, never `GameState`. They need no rules object, never recompute legality, and work with typed `Move` objects they neither encode nor decode; public configuration is read from `view.rules`.
 
 `submit(move, final=True)` is the final-move method. Do not add a separate `submit_final()` alias initially. The latest simplified interface uses fire-and-forget submission, so its return value is `None`; earlier sketches with acceptance booleans are superseded. The runner remains the legality authority.
 
@@ -569,7 +572,7 @@ An agent should submit a cheap legal baseline immediately, then improve it:
 
 ```python
 def think(self, view: PlayerView, turn: TurnContext) -> None:
-    best = self.quick_choice(view, turn.legal_moves)
+    best = self.quick_choice(view, view.legal_moves)
     turn.submit(best)
 
     while turn.remaining_seconds() > 0.005:
@@ -585,7 +588,7 @@ The remaining-time query reports nonnegative seconds from a monotonic deadline. 
 
 ### Required baselines
 
-**RandomAgent:** sample uniformly from `turn.legal_moves` using a dedicated per-decision RNG, and submit final immediately. Uniform rank/count actions avoid overweighting equivalent suit subsets.
+**RandomAgent:** sample uniformly from `view.legal_moves` using a dedicated per-decision RNG, and submit final immediately. Uniform rank/count actions avoid overweighting equivalent suit subsets.
 
 **GreedyAgent:** handle every phase. During setup, score candidate face-up sets by fixed card retention scores and choose the largest sum. During play prefer the largest count shed; among equally sized plays prefer to spend cards with lower retention score. Score ordinary ranks by their numeric value, seven as 17, nine as 20, two as 21, joker as 22, ten as 23. For blind reveals choose a seeded random slot; pick up when it is the only action. Use seeded random tie-breaking over a deterministically ordered tied list. This is an explicit baseline heuristic, not a claim of optimal strategy.
 
@@ -601,7 +604,9 @@ class AgentSpec:
 def build_agent(spec: AgentSpec, *, seed: int) -> Agent: ...
 ```
 
-Add typed configuration fields only when an implemented agent needs them. Do not store a deck seed in `AgentSpec`. A small explicit built-in factory suffices; dynamic discovery is unnecessary.
+Add typed configuration fields only when an implemented agent needs them. Do not store a deck seed in `AgentSpec`. A small explicit built-in factory suffices; dynamic discovery is unnecessary. The spec validates its own kind against the built-in list when it is constructed, so a mistyped lineup fails where it is written rather than inside a worker at decision time.
+
+Baselines can be driven synchronously with a fake in-memory turn context that captures submissions and dictates the clock. A whole match runs that way with no production timing code: create the state, filter `initial_events()` per player, observe the actor with that player's history, build a fresh agent from its spec and a fresh seed, let it think, apply the finalized move, then append the filtered transition events to every player's history.
 
 ## 10. Timed decisions and match runner
 
@@ -638,7 +643,7 @@ Default to a 2-second budget, configurable and strictly positive and finite. The
 
 `multiprocessing.Pipe(duplex=False)` returns `(receiver, sender)`. The worker uses the sender; the parent runner keeps the receiver. After spawn, the parent closes its copy of the sender so EOF can be detected. The worker closes its sender in a `finally` block.
 
-The concrete pipe-backed `TurnContext` stores the sender, legal moves, monotonic deadline, and a local closed flag. `remaining_seconds()` clamps the clock difference to zero. `submit()` sends a small `Submission(move, final)` message unless locally expired or closed, and sets its local closed flag after sending final. Broken-pipe errors mean the turn is closed and should not crash normal cleanup.
+The concrete pipe-backed `TurnContext` stores the sender, the monotonic deadline, and a local closed flag; the legal moves stay on the view the worker is given. `remaining_seconds()` clamps the clock difference to zero. `submit()` sends a small `Submission(move, final)` message unless locally expired or closed, and sets its local closed flag after sending final. Broken-pipe errors mean the turn is closed and should not crash normal cleanup.
 
 The worker calls `think()`, then sends a `WorkerFinished` message. On an ordinary agent exception, send a small `WorkerFailed` record with exception type/message, then close. Use tagged frozen dataclasses for these three message types; keep them in `match.py`. Do not ship huge tracebacks or arbitrary data structures as moves.
 
@@ -991,6 +996,7 @@ The work is complete when project files were scaffolded with the appropriate too
 | Physical-card subsets for every play | Rank/count play actions; physical IDs retained for setup/replay |
 | Full state passed to agents | Immutable player-specific view only |
 | Cached legal moves in PlayerView vs method | One generator on `GameState`; `observe()` fills the view's `legal_moves` field; runner-local precomputation |
+| `TurnContext.legal_moves` beside the view's field | Turn exposes `submit()` and `remaining_seconds()` only; agents read `view.legal_moves` |
 | Separate `Ruleset` object beside `GameState` | Operations on `GameState`, which already carries the fixed profile |
 | `choose_move(view) -> Move` | `think(view, turn) -> None` with repeated submissions |
 | Separate final method / acceptance boolean | `submit(move, final=True) -> None`, no acknowledgements |
