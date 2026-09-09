@@ -18,7 +18,6 @@ from shed.agents import (
     RandomAgent,
     TurnContext,
     build_agent,
-    legal_choices,
 )
 from shed.engine import GameState, Play, PlayerId, PlayerView, Rank, SlotId, Zone
 from tests.agents.conftest import FakeTurn
@@ -187,8 +186,6 @@ def test_baselines_refuse_a_view_with_no_choices(picker: DeckPicker) -> None:
     waiting = state.observe(SECOND_SEAT)
     assert waiting.legal_moves == ()
 
-    with pytest.raises(ValueError, match="no legal moves"):
-        legal_choices(waiting)
     for agent in _every_agent():
         with pytest.raises(ValueError, match="no legal moves"):
             agent.think(waiting, FakeTurn())

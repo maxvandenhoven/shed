@@ -12,14 +12,7 @@ Both cover every decision the engine can ask for -- arrangement, hand, face-up,
 blind reveal, and forced pickup.
 """
 
-from shed.agents.base import (
-    AGENT_KINDS,
-    Agent,
-    AgentSpec,
-    TurnContext,
-    build_agent,
-    legal_choices,
-)
+from shed.agents.base import AGENT_KINDS, Agent, AgentSpec, TurnContext, build_agent
 from shed.agents.greedy import RETENTION_SCORE, GreedyAgent
 from shed.agents.random import RandomAgent
 
@@ -32,5 +25,4 @@ __all__ = [
     "RandomAgent",
     "TurnContext",
     "build_agent",
-    "legal_choices",
 ]

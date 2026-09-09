@@ -13,7 +13,7 @@ move tuple, so the choice is reproducible from the seed alone.
 
 from collections.abc import Mapping
 
-from shed.agents.base import Agent, TurnContext, legal_choices
+from shed.agents.base import Agent, TurnContext
 from shed.engine import Arrange, CardId, Move, PickUp, Play, PlayerView, Rank, Reveal
 
 __all__ = ["RETENTION_SCORE", "GreedyAgent"]
@@ -109,7 +109,8 @@ class GreedyAgent(Agent):
             turn: The submission channel for this decision.
 
         Raises:
-            ValueError: If the view offers no legal moves.
+            ValueError: If the view offers no legal moves, which means this seat
+                is not the current actor.
         """
         turn.submit(self._choose(view), final=True)
 
@@ -126,7 +127,9 @@ class GreedyAgent(Agent):
         Raises:
             ValueError: If the view offers no legal moves.
         """
-        moves = legal_choices(view)
+        moves = view.legal_moves
+        if not moves:
+            raise ValueError(f"Player {view.viewer} was asked to decide with no legal moves")
         ranks = _own_rank_by_id(view)
         scored = [(_score(move, ranks), move) for move in moves]
         best = min(key for key, _ in scored)

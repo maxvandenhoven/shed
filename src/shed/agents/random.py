@@ -6,7 +6,7 @@ tuple eventually reaches arrangements, hand and face-up batches, blind reveals,
 and forced pickups.
 """
 
-from shed.agents.base import Agent, TurnContext, legal_choices
+from shed.agents.base import Agent, TurnContext
 from shed.engine import PlayerView
 
 __all__ = ["RandomAgent"]
@@ -32,6 +32,9 @@ class RandomAgent(Agent):
             turn: The submission channel for this decision.
 
         Raises:
-            ValueError: If the view offers no legal moves.
+            ValueError: If the view offers no legal moves, which means this seat
+                is not the current actor.
         """
-        turn.submit(self._rng.choice(legal_choices(view)), final=True)
+        if not view.legal_moves:
+            raise ValueError(f"Player {view.viewer} was asked to decide with no legal moves")
+        turn.submit(self._rng.choice(view.legal_moves), final=True)

@@ -34,7 +34,6 @@ __all__ = [
     "AgentSpec",
     "TurnContext",
     "build_agent",
-    "legal_choices",
 ]
 
 AGENT_KINDS: tuple[str, ...] = ("greedy", "random")
@@ -112,27 +111,6 @@ class Agent(ABC):
                 the engine generated for it.
             turn: The submission channel for this decision.
         """
-
-
-def legal_choices(view: PlayerView) -> tuple[Move, ...]:
-    """Return the moves a view offers, refusing an empty tuple.
-
-    Agents read legality from the observation rather than deriving it, so this
-    is the one place the shared "there must be something to choose" check lives.
-
-    Args:
-        view: The observation handed to :meth:`Agent.think`.
-
-    Returns:
-        ``view.legal_moves``, already ordered deterministically by the engine.
-
-    Raises:
-        ValueError: If the view offers nothing, which means the agent was asked
-            to decide for a seat that is not the current actor.
-    """
-    if not view.legal_moves:
-        raise ValueError(f"Player {view.viewer} was asked to decide with no legal moves")
-    return view.legal_moves
 
 
 @dataclass(frozen=True, slots=True)
