@@ -224,7 +224,7 @@ class TestCardSpelling:
         ("card", "bare", "suited"),
         [
             (DECK[0], "2", "2c"),
-            (DECK[8], "T", "Tc"),
+            (DECK[8], "10", "10c"),
             (DECK[50], "K", "Ks"),
             (DECK[53], "JK", "JK"),
         ],
@@ -242,8 +242,8 @@ class TestCardSpelling:
         event = HandDealt(player=PlayerId(0), count=2, cards=(DECK[8], DECK[50]))
         both = ConsoleStyle(visibility=Visibility.OMNISCIENT, show_suits=True)
 
-        assert describe_event(event, OMNISCIENT) == "player 0 is dealt 2 cards: T K"
-        assert describe_event(event, both) == "player 0 is dealt 2 cards: Tc Ks"
+        assert describe_event(event, OMNISCIENT) == "player 0 is dealt 2 cards: 10 K"
+        assert describe_event(event, both) == "player 0 is dealt 2 cards: 10c Ks"
         assert describe_event(event, SUITED) == "player 0 is dealt 2 cards"
 
     def test_a_position_follows_the_same_spelling(self) -> None:
@@ -266,7 +266,7 @@ class TestPositions:
             (Unrestricted(), "unrestricted"),
             (AtLeast(Rank.NINE), "at least 9"),
             (AtMost(Rank.SEVEN), "at most 7"),
-            (AtLeast(Rank.TEN), "at least T"),
+            (AtLeast(Rank.TEN), "at least 10"),
         ],
         ids=["unrestricted", "at-least", "at-most", "ten"],
     )
@@ -314,7 +314,7 @@ class TestOrdering:
         shuffled = HandDealt(player=PlayerId(0), count=3, cards=cards)
         ordered = HandDealt(player=PlayerId(0), count=3, cards=tuple(sorted(cards, key=key)))
 
-        assert describe_event(shuffled, OMNISCIENT) == "player 0 is dealt 3 cards: 4 T K"
+        assert describe_event(shuffled, OMNISCIENT) == "player 0 is dealt 3 cards: 4 10 K"
         assert describe_event(shuffled, OMNISCIENT) == describe_event(ordered, OMNISCIENT)
 
     def test_ordering_is_by_rank_not_by_the_suit_major_identifier(self) -> None:
@@ -356,7 +356,7 @@ class TestOrdering:
 
         assert lines[1].endswith("7 3 5")  # draw order: identifiers 5, 1, 3.
         assert lines[2].endswith("6 2")  # play order: identifiers 4, 0.
-        assert lines[3].endswith("8 T")  # burned is a bag, so sorted by rank.
+        assert lines[3].endswith("8 10")  # burned is a bag, so sorted by rank.
         assert lines[4].strip() == "player 0: hand 4 9 J | face up - | face down -"
 
     def test_sorting_is_presentation_only(self) -> None:

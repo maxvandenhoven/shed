@@ -90,14 +90,20 @@ RANK_TEXT: dict[Rank, str] = {
     Rank.SEVEN: "7",
     Rank.EIGHT: "8",
     Rank.NINE: "9",
-    Rank.TEN: "T",
+    Rank.TEN: "10",
     Rank.JACK: "J",
     Rank.QUEEN: "Q",
     Rank.KING: "K",
     Rank.ACE: "A",
     Rank.JOKER: "JK",
 }
-"""Single-character rank labels, so a batch of cards reads as one short group."""
+"""Short rank labels, so a batch of cards reads as one compact group.
+
+Ten is spelled out rather than abbreviated to the ``T`` of card shorthand. The
+abbreviation is a convention a reader has to know, it buys no real alignment
+here -- nothing is column-aligned, and the joker is two characters regardless --
+and ten is the rank a reader of this game scans for, since it burns the pile.
+"""
 
 
 class Visibility(Enum):
@@ -170,7 +176,7 @@ so one shared instance is safe.
 def card_text(card: Card, style: ConsoleStyle = DEFAULT_STYLE) -> str:
     """Render one card compactly.
 
-    Deliberately ASCII -- ``Th`` rather than a suit symbol -- because this goes
+    Deliberately ASCII -- ``10h`` rather than a suit symbol -- because this goes
     to whatever console the user has, and a replay summary is not worth an
     encoding failure.
 
@@ -180,7 +186,7 @@ def card_text(card: Card, style: ConsoleStyle = DEFAULT_STYLE) -> str:
             read.
 
     Returns:
-        The rank alone, such as ``7`` or ``T``; the rank and its suit initial,
+        The rank alone, such as ``7`` or ``10``; the rank and its suit initial,
         such as ``7d``, when suits are shown; and ``JK`` for a joker either way,
         since a joker has no suit.
     """

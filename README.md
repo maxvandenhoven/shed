@@ -255,22 +255,22 @@ in, face-down slots and undrawn deck included.
 
 ```
 $ uv run scripts/play.py --agents random greedy --seed 42 --max-play-decisions 10 --omniscient
-player 0 deals to 2 seats; player 0 shows 6 7 T, player 1 shows 3 8 T
+player 0 deals to 2 seats; player 0 shows 6 7 10, player 1 shows 3 8 10
 player 1 is dealt 3 cards: 4 5 K
 player 0 is dealt 3 cards: 2 3 A
-player 1 settles on 8 T K face up
+player 1 settles on 8 10 K face up
 player 1 plays 3 from hand
 player 1 draws 1 card: K
 …
-player 0 plays T from hand
+player 0 plays 10 from hand
 player 0 burns 8 cards (ten)
 
 position: play | ply 10 | to act: player 0 | constraint: at least 5
-  draw pile (26, next draw last): 2 T 7 6 8 J 5 7 4 J K Q 5 Q 9 5 9 8 6 JK Q Q J 4 K 2
+  draw pile (26, next draw last): 2 10 7 6 8 J 5 7 4 J K Q 5 Q 9 5 9 8 6 JK Q Q J 4 K 2
   discard (2): 7 5
-  burned (8): 2 3 4 6 8 T K A
-  player 0: hand 9 A JK | face up 3 7 A | face down 0=9 1=T 2=4
-  player 1: hand 2 J A | face up 8 T K | face down 0=3 1=3 2=6
+  burned (8): 2 3 4 6 8 10 K A
+  player 0: hand 9 A JK | face up 3 7 A | face down 0=9 1=10 2=4
+  player 1: hand 2 J A | face up 8 10 K | face down 0=3 1=3 2=6
 ```
 
 That is the view for reading back *why* an agent played what it did. It is
