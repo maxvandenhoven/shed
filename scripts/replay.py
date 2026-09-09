@@ -12,8 +12,10 @@ comparing events, outcome, and final position. No agent is built and no worker
 is started, so verification is deterministic and does not depend on the timing
 the match was played under.
 
-The console summary stays public: it reports private events by count, even
-though the file it reads holds their identities.
+The console summary stays public by default: it reports private events by count,
+even though the file it reads holds their identities. ``--omniscient`` prints
+them instead, along with the position the match stopped in -- an operator view of
+an artifact that was always trusted, not a new capability.
 """
 
 from __future__ import annotations
@@ -23,7 +25,13 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-from shed.cli import narrate, replay_summary
+from shed.cli import (
+    Visibility,
+    describe_position,
+    narrate,
+    replay_summary,
+    restore_default_sigpipe,
+)
 from shed.replay import Replay, ReplayFormatError, read_replay, verify_replay
 
 
@@ -46,21 +54,31 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--events", action="store_true", help="also print the recorded public actions"
     )
+    parser.add_argument(
+        "--omniscient",
+        action="store_true",
+        help="print the actions with hidden identities, and the final position",
+    )
     return parser
 
 
-def _print_events(replay: Replay) -> None:
-    """Print the recorded match as public commentary.
+def _print_recording(replay: Replay, *, omniscient: bool) -> None:
+    """Print the recorded match as commentary.
 
     Args:
-        replay: The decoded replay. Its private events are printed by count
-            only, so the identities the file holds are not dumped.
+        replay: The decoded replay.
+        omniscient: Whether to show the identities the file holds and the
+            position the match stopped in. By default private events are
+            printed by count alone.
     """
     events = list(replay.initial_events)
     for decision in replay.decisions:
         events.extend(decision.events)
-    print("\n".join(narrate(events)))
+    print("\n".join(narrate(events, Visibility.OMNISCIENT if omniscient else Visibility.PUBLIC)))
     print()
+    if omniscient:
+        print("\n".join(describe_position(replay.final_position, replay.deck)))
+        print()
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -84,8 +102,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"error: cannot read {args.path}: {error}", file=sys.stderr)
         return 2
 
-    if args.events:
-        _print_events(replay)
+    if args.events or args.omniscient:
+        _print_recording(replay, omniscient=args.omniscient)
     print("\n".join(replay_summary(replay)))
 
     if not args.verify:
@@ -102,4 +120,5 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    restore_default_sigpipe()
     raise SystemExit(main())

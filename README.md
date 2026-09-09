@@ -240,12 +240,47 @@ uv run scripts/replay.py results/match.json --verify
 
 `play.py` prints the public actions and the outcome, and exits nonzero only when
 a match aborts — a truncated match is a limit being reached, not a failure.
-`--quiet` drops the action list, `--strict-failures` aborts on any agent failure,
+`--quiet` drops the action log, `--strict-failures` aborts on any agent failure,
 and `--dealer`, `--max-play-decisions`, `--agent-seed`, and `--fallback-seed`
 expose the rest of the runner's configuration. `replay.py` summarizes a saved
 file, adds the recorded actions with `--events`, and with `--verify` replays it;
 it exits `1` when verification fails and `2` when the file cannot be read or is
 not a replay this release supports.
+
+### Watching a match with full information
+
+Both commands take `--omniscient`, which prints what the players could not see:
+the dealt hands, every replenishment draw, and the position the match stopped
+in, face-down slots and undrawn deck included.
+
+```
+$ uv run scripts/play.py --agents random greedy --seed 42 --max-play-decisions 10 --omniscient
+player 0 deals to 2 seats; player 0 shows 7c Tc 6s, player 1 shows 8c 3d Th
+player 1 is dealt 3 cards: 4c Kh 5s
+player 0 is dealt 3 cards: 2d 3h As
+player 1 settles on 8c Th Kh face up
+player 1 plays 3d from hand
+player 1 draws 1 card: Ks
+…
+player 0 plays Tc from hand
+player 0 burns 8 cards (ten)
+
+position: play | ply 10 | to act: player 0 | constraint: at least 5
+  draw pile (26, next draw last): 2s Td 7s 6h 8d Js 5d 7h 4h Jc Kc Qd 5h Qs 9h …
+  discard (2): 7d 5s
+  burned (8): 3d 6s Ks 2d 4c 8h Ah Tc
+  player 0: hand Ac JK 9s | face up 7c 3h As | face down 0=9c 1=Ts 2=4d
+  player 1: hand 2h Jh Ad | face up 8c Th Kh | face down 0=3s 1=3c 2=6d
+```
+
+That is the view for reading back *why* an agent played what it did. It is
+orthogonal to `--quiet`: together they print the position and the summary and no
+action log. It is also purely a console setting. Events always carry their
+identities — a runner records them and a replay file stores them — so the public
+view is redaction applied on the way to the terminal, and `--omniscient` simply
+declines to apply it. Nothing about what an agent is *given* changes: a strategy
+sees a `PlayerView`, which never contains another seat's cards whatever the
+operator asked to print.
 
 Two commands from the specification belong to the next milestone and do not
 exist yet:

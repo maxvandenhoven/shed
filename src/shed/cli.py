@@ -6,23 +6,34 @@ into a seated lineup, validating numeric arguments, narrating a match as public
 actions, and summarizing how one ended. Both the play command and the replay
 command use these, and the gauntlet command will.
 
-Narration is deliberately conservative about hidden information. A replay file
-is a trusted artifact that holds every face-down identity and every private
-draw, so a summary written from one could dump the whole game. It does not:
-:func:`describe_event` reports private events by their public count alone, the
-same thing an opponent at the table knows. Everything else it prints is public
-by construction -- cards already on the table, the pile, a revealed card.
+Narration has two settings, and the default is the careful one. Under
+:attr:`Visibility.PUBLIC` a private event is reported by its public count alone
+-- the same thing an opponent at the table knows -- and everything else printed
+is public by construction: cards already on the table, the pile, a revealed
+card. Under :attr:`Visibility.OMNISCIENT` the identities are printed too, and
+:func:`describe_position` will dump the authoritative position on top.
+
+Both are views of trusted data. The events a runner records and the events a
+replay file holds always carry hidden identities; ``PUBLIC`` is redaction
+applied on the way to the console, not a limit on what is available. The
+information boundary that matters is elsewhere and is unaffected by any of this:
+an agent sees a :class:`~shed.engine.PlayerView`, which never contains another
+seat's cards whatever the operator asked to print.
 """
 
 from __future__ import annotations
 
 import argparse
+import signal
 from collections.abc import Iterable, Sequence
+from enum import Enum
 
 from shed.agents import AGENT_KINDS, AgentSpec
 from shed.engine import (
     DEFAULT_RULES,
     ArrangementCommitted,
+    AtLeast,
+    AtMost,
     Card,
     CardRevealed,
     CardsDrawn,
@@ -34,21 +45,27 @@ from shed.engine import (
     Outcome,
     PileBurned,
     PilePickedUp,
+    PlayConstraint,
     PlayerId,
     Rank,
+    Unrestricted,
 )
-from shed.match import MatchMetadata, MatchResult, MatchStatus, TurnRecord
+from shed.match import FinalPosition, MatchMetadata, MatchResult, MatchStatus, TurnRecord
 from shed.replay import Replay
 
 __all__ = [
+    "Visibility",
     "build_lineup",
     "card_text",
+    "describe_constraint",
     "describe_event",
+    "describe_position",
     "match_summary",
     "narrate",
     "positive_count",
     "positive_seconds",
     "replay_summary",
+    "restore_default_sigpipe",
 ]
 
 RANK_TEXT: dict[Rank, str] = {
@@ -68,6 +85,22 @@ RANK_TEXT: dict[Rank, str] = {
     Rank.JOKER: "JK",
 }
 """Single-character rank labels, so a batch of cards reads as one short group."""
+
+
+class Visibility(Enum):
+    """How much of a recorded game the console is allowed to show.
+
+    Attributes:
+        PUBLIC: What an onlooker at the table knows. Private events -- the deal
+            and every replenishment draw -- are reported by count only. This is
+            the default everywhere.
+        OMNISCIENT: Everything the record holds, identities included. An opt-in
+            operator view of a match that has already been played; it changes
+            nothing about what an agent is given while playing.
+    """
+
+    PUBLIC = "public"
+    OMNISCIENT = "omniscient"
 
 
 def card_text(card: Card) -> str:
@@ -112,18 +145,42 @@ def _count_text(count: int, noun: str) -> str:
     return f"{count} {noun}" if count == 1 else f"{count} {noun}s"
 
 
-def describe_event(event: ObservedEvent) -> str:
-    """Describe one event as a line of public commentary.
+def _private_text(count: int, cards: tuple[Card, ...] | None, visibility: Visibility) -> str:
+    """Render the cards of a private event, or only how many there were.
 
-    Private events -- the deal and every replenishment draw -- are reported by
-    count only. Their identities are in the replay, and this function is what
-    keeps them out of a console summary.
+    This is the single place a hidden identity can reach the console, which is
+    what keeps the two visibilities from becoming two narrators.
+
+    Args:
+        count: How many cards the event moved; public either way.
+        cards: The identities, or ``None`` in an event already filtered for
+            somebody who may not know them.
+        visibility: How much the console may show.
+
+    Returns:
+        The count alone, or the count and the cards.
+    """
+    counted = _count_text(count, "card")
+    if visibility is Visibility.PUBLIC or cards is None:
+        return counted
+    return f"{counted}: {_cards_text(cards)}"
+
+
+def describe_event(event: ObservedEvent, visibility: Visibility = Visibility.PUBLIC) -> str:
+    """Describe one event as a line of commentary.
+
+    Only the two private events read ``visibility`` at all: everything else here
+    was public when it happened. An event that was already filtered keeps its
+    identities hidden even under :attr:`Visibility.OMNISCIENT`, because they are
+    genuinely not in it.
 
     Args:
         event: A full internal event.
+        visibility: How much of it to show. The default is what an onlooker at
+            the table would have seen.
 
     Returns:
-        One line describing what an onlooker at the table would have seen.
+        One line describing what happened.
     """
     match event:
         case GameStarted(dealer=dealer, seat_order=seats, players=players):
@@ -131,8 +188,8 @@ def describe_event(event: ObservedEvent) -> str:
                 f"player {public.player} shows {_cards_text(public.face_up)}" for public in players
             )
             return f"player {dealer} deals to {len(seats)} seats; {shown}"
-        case HandDealt(player=player, count=count):
-            return f"player {player} is dealt {_count_text(count, 'card')}"
+        case HandDealt(player=player, count=count, cards=cards):
+            return f"player {player} is dealt {_private_text(count, cards, visibility)}"
         case ArrangementCommitted(player=player, face_up=face_up):
             return f"player {player} settles on {_cards_text(face_up)} face up"
         case CardsPlayed(player=player, source=source, cards=cards):
@@ -140,8 +197,8 @@ def describe_event(event: ObservedEvent) -> str:
         case CardRevealed(player=player, slot=slot, card=card, playable=playable):
             verdict = "playable" if playable else "not playable"
             return f"player {player} reveals {card_text(card)} in slot {slot}: {verdict}"
-        case CardsDrawn(player=player, count=count):
-            return f"player {player} draws {_count_text(count, 'card')}"
+        case CardsDrawn(player=player, count=count, cards=cards):
+            return f"player {player} draws {_private_text(count, cards, visibility)}"
         case PilePickedUp(player=player, cards=cards):
             return (
                 f"player {player} picks up {_count_text(len(cards), 'card')}: {_cards_text(cards)}"
@@ -152,16 +209,104 @@ def describe_event(event: ObservedEvent) -> str:
             return f"player {outcome.winner} wins"
 
 
-def narrate(events: Iterable[ObservedEvent]) -> list[str]:
-    """Describe a run of events as public commentary.
+def narrate(
+    events: Iterable[ObservedEvent], visibility: Visibility = Visibility.PUBLIC
+) -> list[str]:
+    """Describe a run of events as commentary.
 
     Args:
         events: Full internal events in resolution order.
+        visibility: How much of them to show.
 
     Returns:
         One line per event, in the same order.
     """
-    return [describe_event(event) for event in events]
+    return [describe_event(event, visibility) for event in events]
+
+
+def describe_constraint(constraint: PlayConstraint) -> str:
+    """Describe what the next ordinary rank has to satisfy.
+
+    Args:
+        constraint: The restriction standing on the pile.
+
+    Returns:
+        A short phrase, such as ``at least 9`` or ``unrestricted``.
+    """
+    match constraint:
+        case Unrestricted():
+            return "unrestricted"
+        case AtLeast(rank=rank):
+            return f"at least {RANK_TEXT[rank]}"
+        case AtMost(rank=rank):
+            return f"at most {RANK_TEXT[rank]}"
+
+
+def _by_id(deck: Iterable[Card]) -> dict[int, Card]:
+    """Index a deck so a position's identifiers can be rendered as cards.
+
+    Args:
+        deck: The recorded deck, in any order.
+
+    Returns:
+        Every card, keyed by identifier.
+    """
+    return {int(card.id): card for card in deck}
+
+
+def _zone_text(identifiers: Iterable[int], cards: dict[int, Card]) -> str:
+    """Render one zone of a position.
+
+    Args:
+        identifiers: Card identifiers in their stored order.
+        cards: Index built by :func:`_by_id`.
+
+    Returns:
+        The rendered cards, or ``-`` for an empty zone.
+    """
+    return " ".join(card_text(cards[identifier]) for identifier in identifiers) or "-"
+
+
+def describe_position(position: FinalPosition, deck: Iterable[Card]) -> list[str]:
+    """Describe an authoritative position in full, hidden cards included.
+
+    This is the omniscient counterpart to :func:`describe_event`: where the
+    narration says what happened, this says where everything ended up, face-down
+    slots and the undrawn deck included. Print it only when the operator asked
+    for it.
+
+    Args:
+        position: The digest to describe.
+        deck: The recorded deck, which resolves the digest's identifiers.
+
+    Returns:
+        One header line, three lines for the shared piles, and one line per
+        seat.
+
+    Raises:
+        KeyError: If the position names a card the deck does not contain, which
+            means the two came from different matches.
+    """
+    cards = _by_id(deck)
+    actor = "nobody" if position.current_player is None else f"player {position.current_player}"
+    lines = [
+        f"position: {position.phase.value} | ply {position.current_ply} | to act: {actor} | "
+        f"constraint: {describe_constraint(position.constraint)}",
+        f"  draw pile ({len(position.draw_pile)}, next draw last): "
+        f"{_zone_text(position.draw_pile, cards)}",
+        f"  discard ({len(position.discard_pile)}): {_zone_text(position.discard_pile, cards)}",
+        f"  burned ({len(position.burned_cards)}): {_zone_text(position.burned_cards, cards)}",
+    ]
+    for player in position.players:
+        face_down = (
+            " ".join(f"{slot}={card_text(cards[card_id])}" for slot, card_id in player.face_down)
+            or "-"
+        )
+        lines.append(
+            f"  player {player.player}: hand {_zone_text(player.hand, cards)} | "
+            f"face up {_zone_text(player.face_up, cards)} | face down {face_down}"
+        )
+    return lines
 
 
 def build_lineup(kinds: Sequence[str]) -> dict[PlayerId, AgentSpec]:
@@ -190,6 +335,21 @@ def build_lineup(kinds: Sequence[str]) -> dict[PlayerId, AgentSpec]:
         PlayerId(seat): AgentSpec(kind=kind, name=f"{kind}-{seat}")
         for seat, kind in enumerate(kinds)
     }
+
+
+def restore_default_sigpipe() -> None:
+    """Let a closed pipe end the process quietly, as a Unix tool should.
+
+    Python turns ``SIGPIPE`` into a :class:`BrokenPipeError`, so a long action
+    log piped into ``head`` ends in a traceback instead of simply stopping.
+    Restoring the default disposition makes these commands behave like every
+    other program in a pipeline. Call it from a script's main guard only: it
+    changes process-wide signal state and has no business running on import.
+
+    On a platform without ``SIGPIPE`` -- Windows -- this does nothing.
+    """
+    if hasattr(signal, "SIGPIPE"):
+        signal.signal(signal.SIGPIPE, signal.SIG_DFL)
 
 
 def positive_seconds(text: str) -> float:

@@ -6,9 +6,17 @@ Usage from the repository root::
 
 The console shows the public actions and the final outcome. Hidden information
 -- the dealt hands, every replenishment draw, the face-down identities -- stays
-out of it: private events are reported by count. The saved replay is the
-opposite, a complete trusted artifact, which is why it is written only where the
-caller asks for it.
+out of it by default: private events are reported by count. ``--omniscient``
+opts into the operator view instead, printing those identities and the whole
+final position, which is how you read back what an agent was actually holding
+when it decided. It changes only what is printed: the agents in this very match
+were given filtered observations regardless. The saved replay is a complete
+trusted artifact either way, which is why it is written only where the caller
+asks for it.
+
+``--quiet`` and ``--omniscient`` are orthogonal. ``--quiet`` drops the action
+log; ``--omniscient`` unredacts it and adds the final position. Together they
+print the summary and the final position and nothing else.
 
 This file is an argument parser and nothing else. Lineups, narration, and
 summaries live in :mod:`shed.cli`, and the match itself is run by
@@ -26,16 +34,19 @@ from pathlib import Path
 
 from shed.agents import AGENT_KINDS
 from shed.cli import (
+    Visibility,
     agent_kinds_help,
     build_lineup,
+    describe_position,
     match_summary,
     narrate,
     positive_count,
     positive_seconds,
+    restore_default_sigpipe,
 )
 from shed.engine import PlayerId
-from shed.match import MatchConfig, MatchRunner, MatchStatus
-from shed.replay import detect_source_revision, write_match
+from shed.match import MatchConfig, MatchResult, MatchRunner, MatchStatus
+from shed.replay import detect_source_revision, match_deck, write_match
 
 FAILED_STATUSES = (MatchStatus.AGENT_FAILED, MatchStatus.ENGINE_FAILED)
 """Statuses reported with a nonzero exit; a truncated match is not a failure."""
@@ -86,9 +97,35 @@ def build_parser() -> argparse.ArgumentParser:
         "--output", type=Path, default=None, help="write the replay to this JSON file"
     )
     parser.add_argument(
-        "--quiet", action="store_true", help="print the summary without the public actions"
+        "--quiet", action="store_true", help="print the summary without the action log"
+    )
+    parser.add_argument(
+        "--omniscient",
+        action="store_true",
+        help="show hidden identities in the action log and print the final position",
     )
     return parser
+
+
+def _report(result: MatchResult, *, quiet: bool, omniscient: bool) -> None:
+    """Print one match to the console.
+
+    Args:
+        result: The match to report.
+        quiet: Whether to leave out the action log.
+        omniscient: Whether to show what the players could not see.
+    """
+    visibility = Visibility.OMNISCIENT if omniscient else Visibility.PUBLIC
+    if not quiet:
+        events = list(result.initial_events)
+        for decision in result.decisions:
+            events.extend(decision.events)
+        print("\n".join(narrate(events, visibility)))
+        print()
+    if omniscient:
+        print("\n".join(describe_position(result.final_position, match_deck(result.metadata))))
+        print()
+    print("\n".join(match_summary(result)))
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -121,24 +158,23 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     result = runner.run(deal_seed=args.seed, dealer=PlayerId(args.dealer))
 
-    if not args.quiet:
-        events = list(result.initial_events)
-        for decision in result.decisions:
-            events.extend(decision.events)
-        print("\n".join(narrate(events)))
-        print()
-    print("\n".join(match_summary(result)))
-
+    # The artifact is written before anything is printed, so a console that goes
+    # away -- a pipe into `head`, a closed terminal -- cannot cost the replay.
+    written = None
     if args.output is not None:
         try:
             written = write_match(result, args.output, source_revision=detect_source_revision())
         except OSError as error:
             print(f"error: cannot write {args.output}: {error}", file=sys.stderr)
             return 1
+
+    _report(result, quiet=args.quiet, omniscient=args.omniscient)
+    if written is not None:
         print(f"replay: {written}")
 
     return 1 if result.status in FAILED_STATUSES else 0
 
 
 if __name__ == "__main__":
+    restore_default_sigpipe()
     raise SystemExit(main())

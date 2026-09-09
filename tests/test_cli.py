@@ -17,18 +17,30 @@ import pytest
 
 from shed.agents import AgentSpec
 from shed.cli import (
+    Visibility,
     build_lineup,
     card_text,
+    describe_constraint,
     describe_event,
+    describe_position,
     match_summary,
     narrate,
     positive_count,
     positive_seconds,
     replay_summary,
 )
-from shed.engine import CardsDrawn, HandDealt, PlayerId
+from shed.engine import (
+    AtLeast,
+    AtMost,
+    CardsDrawn,
+    HandDealt,
+    PlayConstraint,
+    PlayerId,
+    Rank,
+    Unrestricted,
+)
 from shed.match import MatchStatus
-from shed.replay import decode_replay, match_document
+from shed.replay import decode_replay, match_deck, match_document
 from tests.test_replay import DECK, roundtrip, sample_events, sync_match
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
@@ -143,10 +155,84 @@ class TestNarration:
         assert cards is not None
         assert all(card_text(card) not in line for card in cards)
 
+    @pytest.mark.parametrize(
+        "event",
+        [
+            HandDealt(player=PlayerId(0), count=3, cards=DECK[:3]),
+            CardsDrawn(player=PlayerId(1), count=2, cards=DECK[3:5]),
+        ],
+        ids=["deal", "draw"],
+    )
+    def test_omniscient_narration_names_them(self, event: HandDealt | CardsDrawn) -> None:
+        """The opt-in view prints exactly the identities the default withholds."""
+        line = describe_event(event, Visibility.OMNISCIENT)
+        cards = event.cards
+        assert cards is not None
+        assert all(card_text(card) in line for card in cards)
+
+    def test_a_filtered_event_stays_hidden_even_when_omniscient(self) -> None:
+        """Identities a record does not hold cannot be printed from it."""
+        filtered = HandDealt(player=PlayerId(0), count=3, cards=None)
+        assert describe_event(filtered, Visibility.OMNISCIENT) == "player 0 is dealt 3 cards"
+
+    def test_public_narration_is_the_default(self) -> None:
+        """Nothing leaks by omission: the careful setting is the one you get."""
+        event = HandDealt(player=PlayerId(0), count=3, cards=DECK[:3])
+        assert describe_event(event) == describe_event(event, Visibility.PUBLIC)
+        assert narrate([event]) == narrate([event], Visibility.PUBLIC)
+
     def test_public_cards_are_named(self) -> None:
         """Cards everybody can see are shown, because that is the point of a summary."""
         played = next(line for line in narrate(sample_events()) if "plays" in line)
         assert card_text(DECK[0]) in played
+
+
+class TestPositions:
+    """The omniscient position dump, which resolves identifiers to cards."""
+
+    @pytest.mark.parametrize(
+        ("constraint", "expected"),
+        [
+            (Unrestricted(), "unrestricted"),
+            (AtLeast(Rank.NINE), "at least 9"),
+            (AtMost(Rank.SEVEN), "at most 7"),
+            (AtLeast(Rank.TEN), "at least T"),
+        ],
+        ids=["unrestricted", "at-least", "at-most", "ten"],
+    )
+    def test_constraints_read_as_english(self, constraint: PlayConstraint, expected: str) -> None:
+        """The pile's restriction is stated, not spelled as a dataclass."""
+        assert describe_constraint(constraint) == expected
+
+    def test_every_zone_of_the_position_is_reported(self) -> None:
+        """Hands, face-up cards, face-down slots, and all three piles appear."""
+        result = sync_match(max_play_decisions=6)
+        lines = describe_position(result.final_position, match_deck(result.metadata))
+
+        assert lines[0].startswith("position: play | ply 6 |")
+        assert "draw pile (" in lines[1]
+        assert "discard (" in lines[2]
+        assert "burned (" in lines[3]
+        assert len(lines) == 4 + result.metadata.player_count
+
+    def test_a_players_line_names_the_cards_behind_its_face_down_slots(self) -> None:
+        """The slot identities are the whole point of the omniscient view."""
+        result = sync_match(max_play_decisions=6)
+        deck = match_deck(result.metadata)
+        first = result.final_position.players[0]
+        line = describe_position(result.final_position, deck)[4]
+
+        cards = {int(card.id): card for card in deck}
+        assert line.strip().startswith("player 0: hand ")
+        for slot, card_id in first.face_down:
+            assert f"{slot}={card_text(cards[card_id])}" in line
+
+    def test_an_empty_zone_is_marked_rather_than_blank(self) -> None:
+        """A finished winner has no cards left, and the line still reads."""
+        result = sync_match()
+        lines = describe_position(result.final_position, match_deck(result.metadata))
+        assert result.outcome is not None
+        assert "hand - | face up - | face down -" in lines[4 + result.outcome.winner]
 
 
 class TestSummaries:
@@ -208,6 +294,31 @@ class TestPlayCommand:
         assert "deals to 2 seats" not in quiet.stdout
         assert "deals to 2 seats" in loud.stdout
         assert len(quiet.stdout.splitlines()) < len(loud.stdout.splitlines())
+
+    def test_omniscient_shows_what_the_public_log_withholds(self) -> None:
+        """The same match, printed twice: the flag adds identities and a position."""
+        public = run_script("play.py", "--agents", "random", "greedy", "--seed", "42", *QUICK_MATCH)
+        omniscient = run_script(
+            "play.py", "--agents", "random", "greedy", "--seed", "42", *QUICK_MATCH, "--omniscient"
+        )
+
+        assert omniscient.returncode == 0, omniscient.stderr
+        assert "is dealt 3 cards\n" in public.stdout
+        assert "is dealt 3 cards: " in omniscient.stdout
+        assert "face down 0=" in omniscient.stdout
+        assert "face down 0=" not in public.stdout
+        assert "position: " not in public.stdout
+
+    def test_omniscient_and_quiet_compose(self) -> None:
+        """Together they print the position and the summary, and no action log."""
+        finished = run_script(
+            "play.py", "--agents", "random", "random", *QUICK_MATCH, "--omniscient", "--quiet"
+        )
+
+        assert finished.returncode == 0, finished.stderr
+        assert "deals to 2 seats" not in finished.stdout
+        assert finished.stdout.startswith("position: ")
+        assert "status: " in finished.stdout
 
     @pytest.mark.parametrize(
         ("arguments", "message"),
@@ -280,6 +391,15 @@ class TestReplayCommand:
         assert finished.returncode == 0, finished.stderr
         assert "is dealt 3 cards" in finished.stdout
         assert "deals to 2 seats" in finished.stdout
+
+    def test_omniscient_reveals_the_recording_and_its_position(self, saved: Path) -> None:
+        """The flag implies the action log, unredacted, plus the final position."""
+        finished = run_script("replay.py", str(saved), "--omniscient")
+
+        assert finished.returncode == 0, finished.stderr
+        assert "is dealt 3 cards: " in finished.stdout
+        assert "face down 0=" in finished.stdout
+        assert "draw pile (" in finished.stdout
 
     def test_a_corrupted_recording_fails_verification(self, saved: Path, tmp_path: Path) -> None:
         """A tampered decision exits nonzero and says which one disagreed."""

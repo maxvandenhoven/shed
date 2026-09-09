@@ -119,6 +119,7 @@ __all__ = [
     "encode_constraint",
     "encode_event",
     "encode_move",
+    "match_deck",
     "match_document",
     "read_replay",
     "verify_replay",
@@ -517,6 +518,23 @@ def detect_source_revision(start: Path | None = None) -> str | None:
     return None
 
 
+def match_deck(metadata: MatchMetadata) -> tuple[Card, ...]:
+    """Rebuild the shuffled deck one match was dealt from.
+
+    The runner records the deal seed rather than the order, so this reproduces
+    the order with the same shuffle it dealt with. The replay writer stores the
+    result explicitly; a caller that only wants to resolve card identifiers --
+    an omniscient console view of a match still in memory -- can use it directly.
+
+    Args:
+        metadata: How the match was set up.
+
+    Returns:
+        The deck in deal order. The end of the sequence is the next card drawn.
+    """
+    return tuple(shuffled_deck(seed=metadata.deal_seed, config=metadata.rules))
+
+
 def match_document(result: MatchResult, *, source_revision: str | None = None) -> JsonObject:
     """Build the complete replay document for one finished match.
 
@@ -536,7 +554,7 @@ def match_document(result: MatchResult, *, source_revision: str | None = None) -
         was chosen but never applied.
     """
     metadata = result.metadata
-    deck = shuffled_deck(seed=metadata.deal_seed, config=metadata.rules)
+    deck = match_deck(metadata)
     return {
         "schema": shed.REPLAY_SCHEMA_VERSION,
         "package_version": shed.__version__,
