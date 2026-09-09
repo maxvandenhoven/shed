@@ -51,6 +51,7 @@ from shed.engine import (
     DEFAULT_DEALER,
     DEFAULT_RULES,
     Arrange,
+    CardId,
     GameState,
     IllegalMoveError,
     Move,
@@ -59,10 +60,12 @@ from shed.engine import (
     Phase,
     PickUp,
     Play,
+    PlayConstraint,
     PlayerId,
     PlayerView,
     Reveal,
     RulesConfig,
+    SlotId,
     StateInvariantError,
     filter_events_for,
 )
@@ -75,6 +78,7 @@ if TYPE_CHECKING:  # ForkServerContext does not exist at runtime on Windows.
 __all__ = [
     "AppliedDecision",
     "CloseReason",
+    "FinalPosition",
     "MatchConfig",
     "MatchMetadata",
     "MatchResult",
@@ -82,6 +86,7 @@ __all__ = [
     "MatchStatus",
     "MessageSource",
     "PipeTurnContext",
+    "PlayerPosition",
     "Selection",
     "Submission",
     "TurnRecord",
@@ -650,6 +655,93 @@ class AppliedDecision:
 
 
 @dataclass(frozen=True, slots=True)
+class PlayerPosition:
+    """Where one player's physical cards were when the match stopped.
+
+    Cards are named by identifier alone. The replay records the whole deck, so
+    an identifier resolves to a card, and physical identity is exactly what a
+    position comparison is about.
+
+    Attributes:
+        player: The seat described.
+        hand: Hand cards in their stored order.
+        face_up: Remaining face-up cards in their stored order.
+        face_down: Remaining face-down slots ascending, each with the card that
+            is still hidden in it. This is trusted post-match data and never
+            reaches an agent.
+    """
+
+    player: PlayerId
+    hand: tuple[CardId, ...]
+    face_up: tuple[CardId, ...]
+    face_down: tuple[tuple[SlotId, CardId], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class FinalPosition:
+    """An immutable digest of the position a match stopped in.
+
+    A result carries this instead of the live :class:`~shed.engine.GameState`
+    because the state is mutable and the runner has finished with it. The digest
+    is what a replay compares against: the outcome alone says nothing about a
+    truncated or aborted match, and the event stream says nothing about where
+    the undealt cards ended up.
+
+    Attributes:
+        phase: The engine's stored phase; ``FINISHED`` only when the rules ended
+            the game.
+        current_player: Whoever was to decide next, or ``None`` when finished.
+        current_ply: Resolved PLAY decisions.
+        constraint: The restriction standing on the pile.
+        draw_pile: Undealt cards; the last identifier is the next to be drawn.
+        discard_pile: The live pile in play order.
+        burned_cards: Cards removed from the game.
+        players: One entry per seat, in seat order.
+    """
+
+    phase: Phase
+    current_player: PlayerId | None
+    current_ply: int
+    constraint: PlayConstraint
+    draw_pile: tuple[CardId, ...]
+    discard_pile: tuple[CardId, ...]
+    burned_cards: tuple[CardId, ...]
+    players: tuple[PlayerPosition, ...]
+
+    @classmethod
+    def from_state(cls, state: GameState) -> FinalPosition:
+        """Take the digest of an authoritative state.
+
+        Args:
+            state: The state a match stopped in. It is only read.
+
+        Returns:
+            An independent digest sharing no mutable object with the state.
+        """
+        return cls(
+            phase=state.phase,
+            current_player=state.current_player,
+            current_ply=state.current_ply,
+            constraint=state.constraint,
+            draw_pile=tuple(card.id for card in state.draw_pile),
+            discard_pile=tuple(card.id for card in state.discard_pile),
+            burned_cards=tuple(card.id for card in state.burned_cards),
+            players=tuple(
+                PlayerPosition(
+                    player=seat,
+                    hand=tuple(card.id for card in state.players[seat].hand),
+                    face_up=tuple(card.id for card in state.players[seat].face_up),
+                    face_down=tuple(
+                        (slot, state.players[seat].face_down[slot].id)
+                        for slot in sorted(state.players[seat].face_down)
+                    ),
+                )
+                for seat in state.seat_order
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class MatchConfig:
     """Timing, limits, and failure policy for one match.
 
@@ -731,6 +823,8 @@ class MatchResult:
         play_decisions: Applied PLAY decisions; setup does not count.
         failure: Human-readable detail for a non-finished status.
         metadata: How the match was set up.
+        final_position: Digest of the position the match stopped in, whatever
+            stopped it. A replay reconstructs the same position and compares.
     """
 
     status: MatchStatus
@@ -741,6 +835,7 @@ class MatchResult:
     play_decisions: int
     failure: str | None
     metadata: MatchMetadata
+    final_position: FinalPosition
 
     @property
     def unapplied_turns(self) -> tuple[TurnRecord, ...]:
@@ -971,6 +1066,7 @@ class MatchRunner:
             play_decisions=play_decisions,
             failure=failure,
             metadata=metadata,
+            final_position=FinalPosition.from_state(state),
         )
 
     @staticmethod

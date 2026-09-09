@@ -39,6 +39,7 @@ from shed.engine import (
 from shed.match import (
     AppliedDecision,
     CloseReason,
+    FinalPosition,
     MatchConfig,
     MatchMetadata,
     MatchResult,
@@ -917,6 +918,7 @@ class TestRecords:
                 agents=(AgentSpec(kind="random", name="a"), AgentSpec(kind="greedy", name="b")),
                 config=MatchConfig(),
             ),
+            final_position=FinalPosition.from_state(GameState.create(2, seed=0)),
         )
         assert result.unapplied_turns == (aborted,)
 

@@ -22,7 +22,8 @@ The engine is being built in milestones. What exists today:
 | Agent interface, `AgentSpec`, and the built-in factory | Implemented |
 | Random and greedy baselines across every phase | Implemented |
 | Timed match runner: selection policy, spawned workers, records | Implemented |
-| Replay format, gauntlet, scripts | Not started |
+| Versioned JSON replay, replay verification, `play` and `replay` commands | Implemented |
+| Gauntlet, `gauntlet` and `benchmark` commands | Not started |
 
 The engine works on strictly typed domain objects: constructors take a `Rank`,
 not an integer they convert into one, and check domain invariants only — `ty`
@@ -146,6 +147,48 @@ cutting worker startup from about 120 ms to about 14 ms, because the server has
 parent assigns after import is visible to a plain `fork` child and invisible to a
 real worker.
 
+A finished match is written as versioned JSON, and read back through the only
+serialization boundary the project has. `shed.replay` holds every encoder and
+decoder; the engine, the agents, and the runner never see JSON, and nothing they
+own imports this module:
+
+```python
+from pathlib import Path
+
+from shed.replay import read_replay, verify_replay, write_match
+
+write_match(result, Path("results/match.json"))
+replay = read_replay(Path("results/match.json"))  # validates before it decodes
+check = verify_replay(replay)
+check.ok, check.applied, check.outcome  # True, 58, Outcome(winner=1)
+```
+
+Encoding and decoding are deliberately asymmetric. Encoding takes typed records
+and writes explicit tags — a move is `{"type": "play", "source": "hand",
+"rank": 7, "count": 2}`, never a pickled object. Decoding takes a document that
+merely *claims* to be a replay, and settles every external question before a
+domain object exists: the schema and rules profile it targets, the shape of each
+record, the tag of each union, and the primitive type of each field. A JSON
+boolean is not an integer here, even though Python says it is, so `"count": true`
+is refused rather than played as a one. The engine's constructors then take real
+`Rank`, `Suit`, and identifier values and check only their own invariants.
+
+Verification replays the recording: it deals the recorded deck order with the
+same pure helper the runner deals with, applies each recorded move through
+`GameState.apply_move()`, and compares the resolved events, the outcome, and a
+digest of the final position. No agent is built and no worker is started, so a
+replay is deterministic even though the timed match that produced it was not —
+and the original budgets are irrelevant to it. A move the engine now refuses, a
+tampered event stream, or a position that does not match come back as reported
+problems, not as an exception. Truncated and aborted matches replay too: a
+selection that was chosen but never applied stays out of the applied stream, so
+a replay can never play a move the match did not.
+
+A complete replay file holds hidden information — every face-down identity, the
+deck order, and each private draw — and is a trusted post-match artifact. The
+console output is the opposite: `describe_event` reports private events by their
+public count, so summarizing a replay never dumps what the players could not see.
+
 ## Requirements
 
 - [uv](https://docs.astral.sh/uv/) (manages the Python 3.12 toolchain, the
@@ -179,20 +222,36 @@ The review gates are the same commands with `ruff format --check .` in place of
 | `src/shed/engine/` | Value types, events, and state with the game operations |
 | `src/shed/agents/` | Agent interface, specification, factory, and the baselines |
 | `src/shed/match.py` | Timed decisions: selection policy, worker, pipe context, runner |
+| `src/shed/replay.py` | Versioned JSON replay: the whole codec, and verification |
+| `src/shed/cli.py` | Shared command-line logic: lineups, narration, summaries |
 | `tests/` | pytest suite |
-| `scripts/` | Command-line entry points (none yet) |
+| `scripts/` | Command-line entry points: `play.py`, `replay.py` |
 | `docs/implementation.md` | Implementation specification |
 | `results/` | Generated local outputs, ignored by Git |
 
-## Planned commands (not implemented)
+## Commands
 
-The specification defines these interfaces for later milestones. They do not
-exist yet and will fail if run:
+Play one match and save its replay, then verify that the replay reproduces it:
 
 ```bash
-uv run scripts/play.py --agents random greedy --seed 42 --output results/match.json
-uv run scripts/gauntlet.py --agents random greedy --deals 100 --seed 42 --output results/gauntlet.json
+uv run scripts/play.py --agents random greedy --seed 42 --seconds-per-turn 2 --output results/match.json
 uv run scripts/replay.py results/match.json --verify
+```
+
+`play.py` prints the public actions and the outcome, and exits nonzero only when
+a match aborts — a truncated match is a limit being reached, not a failure.
+`--quiet` drops the action list, `--strict-failures` aborts on any agent failure,
+and `--dealer`, `--max-play-decisions`, `--agent-seed`, and `--fallback-seed`
+expose the rest of the runner's configuration. `replay.py` summarizes a saved
+file, adds the recorded actions with `--events`, and with `--verify` replays it;
+it exits `1` when verification fails and `2` when the file cannot be read or is
+not a replay this release supports.
+
+Two commands from the specification belong to the next milestone and do not
+exist yet:
+
+```bash
+uv run scripts/gauntlet.py --agents random greedy --deals 100 --seed 42 --output results/gauntlet.json
 uv run scripts/benchmark.py --iterations 10000
 ```
 
