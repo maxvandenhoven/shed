@@ -125,16 +125,26 @@ uses the seeded legal fallback, and rejected submissions, worker crashes, and
 fallbacks are all counted in the turn record — `MatchConfig(strict_failures=True)`
 aborts the match on any of them instead of playing on.
 
-The budget is an *acceptance* deadline: process startup counts against it, and
-spawning, scheduling, and reaping add latency after it, so `choose_move()` does
-not return at exactly that instant. The parent enforces the deadline itself —
-it terminates, then kills, and always reaps the worker — because polling inside
-an agent cannot interrupt an infinite loop. Workers are spawned rather than
-forked so no child inherits a copy of the parent's memory, where the
-authoritative state lives; a worker receives only its specification, a fresh
-seed, one observation, and its deadline. The supported threat model is trusted
-local agents sending small, well-formed messages: submissions are validated and
-illegal ones rejected, but this is not a sandbox for hostile code.
+The budget is an *acceptance* deadline: worker startup counts against it, and
+scheduling and reaping add latency after it, so `choose_move()` does not return
+at exactly that instant. The parent enforces the deadline itself — it
+terminates, then kills, and always reaps the worker — because polling inside an
+agent cannot interrupt an infinite loop. A worker receives only its
+specification, a fresh seed, one observation, and its deadline. The supported
+threat model is trusted local agents sending small, well-formed messages:
+submissions are validated and illegal ones rejected, but this is not a sandbox
+for hostile code.
+
+No worker is ever forked from the runner, because that would hand it a copy of
+the parent's memory, where the authoritative state lives. Workers come from a
+`forkserver` where the platform has one, and from `spawn` otherwise. The
+forkserver keeps the same boundary — its server process is created by fork *and
+immediate exec* of a fresh interpreter, so it holds none of the runner's
+objects, and workers fork from that server rather than from the runner — while
+cutting worker startup from about 120 ms to about 14 ms, because the server has
+`shed.match` already imported. A test asserts the boundary directly: a value the
+parent assigns after import is visible to a plain `fork` child and invisible to a
+real worker.
 
 ## Requirements
 

@@ -13,7 +13,7 @@ The layers are separable on purpose:
   tested without a process, a pipe, or a real deadline.
 * :func:`run_agent_worker` is the worker body: build the agent, let it think
   against a pipe-backed turn, then report completion or failure.
-* :class:`MatchRunner` owns the lifecycle -- one freshly spawned process with
+* :class:`MatchRunner` owns the lifecycle -- one freshly started process with
   one fresh pipe and one fresh agent seed per decision -- and the match loop.
 
 The trust model is the design's: local, cooperative Python agents sending small,
@@ -21,14 +21,16 @@ well-formed messages. Validation here rejects malformed or illegal submissions
 and the parent independently enforces the deadline, but multiprocessing
 deserialization is not a security boundary and this is not a sandbox for hostile
 code. The budget is an *acceptance* deadline, not a promise that
-:meth:`MatchRunner.choose_move` returns at that instant: spawning, scheduling,
-message receipt, and reaping all add latency after it.
+:meth:`MatchRunner.choose_move` returns at that instant: worker startup,
+scheduling, message receipt, and reaping all add latency after it.
 
-Workers are spawned rather than forked so a child starts from a fresh
-interpreter and never inherits a copy of the parent's memory, which is where the
-authoritative :class:`~shed.engine.GameState` lives. A worker receives only its
-specification, a fresh seed, the observation, and its deadline; deck seeds,
-fallback seeds, authoritative state, and results never cross the boundary.
+No worker is ever forked from the runner, because that would hand the child a
+copy of the parent's memory, which is where the authoritative
+:class:`~shed.engine.GameState` lives. :func:`worker_context` picks the start
+method that avoids it -- ``forkserver`` where the platform has one, ``spawn``
+otherwise -- and documents why the forkserver keeps the same boundary. A worker
+receives only its specification, a fresh seed, the observation, and its deadline;
+deck seeds, fallback seeds, authoritative state, and results never cross it.
 """
 
 from __future__ import annotations
@@ -41,8 +43,8 @@ from dataclasses import dataclass
 from enum import Enum
 from functools import partial
 from multiprocessing.connection import Connection
-from multiprocessing.context import SpawnContext, SpawnProcess
-from typing import Protocol
+from multiprocessing.process import BaseProcess
+from typing import TYPE_CHECKING, Protocol
 
 from shed.agents import Agent, AgentSpec, build_agent
 from shed.engine import (
@@ -65,6 +67,11 @@ from shed.engine import (
     filter_events_for,
 )
 
+if TYPE_CHECKING:  # ForkServerContext does not exist at runtime on Windows.
+    from multiprocessing.context import ForkServerContext, SpawnContext
+
+    type WorkerContext = ForkServerContext | SpawnContext
+
 __all__ = [
     "AppliedDecision",
     "CloseReason",
@@ -83,6 +90,7 @@ __all__ = [
     "WorkerMessage",
     "run_agent_worker",
     "select_candidate",
+    "worker_context",
 ]
 
 CLEANUP_GRACE_SECONDS = 0.1
@@ -100,6 +108,55 @@ MOVE_TYPES: tuple[type, ...] = (Arrange, Play, Reveal, PickUp)
 ``Move`` is a type alias rather than a class, so it cannot be handed to
 ``isinstance``; this tuple is the runtime spelling of the same union.
 """
+
+PRELOADED_MODULES = ("shed.match",)
+"""Modules a forkserver imports once, so forked workers start with them loaded.
+
+Importing this module transitively imports the engine and the agents, which is
+everything a worker needs to unpickle its arguments and build its agent.
+"""
+
+
+def worker_context() -> WorkerContext:
+    """Return the multiprocessing context every worker is started from.
+
+    A worker must not be able to reach the authoritative
+    :class:`~shed.engine.GameState`, so plain ``fork`` is never used: it would
+    hand the child a copy of the parent's memory. ``forkserver`` is preferred
+    where the platform has it, and ``spawn`` is the fallback (notably on
+    Windows).
+
+    ``forkserver`` keeps the same information boundary as ``spawn``. Its server
+    process is created by fork *and immediate exec* of a fresh interpreter, so it
+    holds none of the parent's Python objects, and workers are forked from that
+    server rather than from the runner. What the server does hold is
+    :data:`PRELOADED_MODULES`, which is why a worker starts in roughly 14 ms
+    instead of the 120 ms a full ``spawn`` costs. The first decision in a process
+    still pays for booting the server.
+
+    One consequence of forking from a shared server: workers inherit that server's
+    module-global state. For the standard library's ``random`` that is harmless --
+    it registers ``os.register_at_fork(after_in_child=...)``, so the global
+    generator reseeds itself in every forked child, which
+    ``tests.test_match_processes`` checks rather than assumes. Shed's own modules
+    hold only immutable constants, and its agents draw from the generator they
+    were constructed with. An agent using a third-party global generator that
+    installs no such hook -- NumPy's legacy global is the usual example -- would
+    get one shared stream across decisions, which is one more reason the agent
+    contract asks strategies to use the generator they are given.
+
+    Returns:
+        The shared context for the chosen start method. Contexts and the
+        forkserver itself are process-wide singletons, so calling this per
+        decision costs nothing and starts no second server. The server watches a
+        pipe to the process that started it and exits when that closes, so it
+        does not outlive the runner.
+    """
+    if "forkserver" not in multiprocessing.get_all_start_methods():  # pragma: no cover
+        return multiprocessing.get_context("spawn")
+    context = multiprocessing.get_context("forkserver")
+    context.set_forkserver_preload(list(PRELOADED_MODULES))
+    return context
 
 
 @dataclass(frozen=True, slots=True)
@@ -255,7 +312,7 @@ def run_agent_worker(
 ) -> None:
     """Build one agent, let it think, and report how the decision ended.
 
-    This is the worker body, shared by the spawned entry point and by tests that
+    This is the worker body, shared by the process entry point and by tests that
     script an agent's behaviour. The agent is constructed here rather than
     passed in, so no live object and no generator state ever crosses a process
     boundary.
@@ -299,10 +356,10 @@ def _worker_main(
     seed: int,
     deadline: float,
 ) -> None:
-    """Spawned entry point for one decision.
+    """Worker entry point for one decision.
 
-    Kept at module scope with serializable arguments, because a spawned child
-    imports this module and rebuilds its arguments by unpickling them.
+    Kept at module scope with serializable arguments, because a worker imports
+    this module and rebuilds its arguments by unpickling them.
 
     Args:
         sender: The worker's end of the decision's pipe.
@@ -471,10 +528,10 @@ def select_candidate(
 
 
 def _shutdown_worker(
-    process: SpawnProcess,
+    process: BaseProcess,
     *endpoints: Connection,
     grace: float = CLEANUP_GRACE_SECONDS,
-) -> None:
+) -> int | None:
     """Stop a worker and release every resource the decision held.
 
     Polling inside a worker cannot interrupt an infinite loop, so the parent
@@ -486,7 +543,15 @@ def _shutdown_worker(
         process: The decision's worker. An unstarted process is only closed.
         *endpoints: Pipe endpoints to close; closing twice is harmless.
         grace: Seconds to wait after termination before killing the worker.
+
+    Returns:
+        The worker's exit status, or ``None`` if it was never started. Zero means
+        it finished on its own; a negative value is the signal it was stopped
+        with, which distinguishes an agent that returned from one the parent had
+        to interrupt. This is diagnostic only -- the decision was already made
+        before cleanup began.
     """
+    exit_code: int | None = None
     try:
         if process.pid is not None:
             if process.is_alive():
@@ -495,10 +560,12 @@ def _shutdown_worker(
             if process.is_alive():
                 process.kill()
             process.join()
+            exit_code = process.exitcode
     finally:
         for endpoint in endpoints:
             endpoint.close()
         process.close()
+    return exit_code
 
 
 @dataclass(frozen=True, slots=True)
@@ -691,7 +758,7 @@ class MatchRunner:
     """Runs timed matches: one worker, one pipe, and one agent seed per decision.
 
     The runner is the only place where timing, processes, and the game meet. It
-    freezes the actor's legal moves once, spawns a worker to think about them,
+    freezes the actor's legal moves once, starts a worker to think about them,
     selects exactly one move, and applies it through the engine, which
     revalidates independently. Filtered history is kept here, outside the state,
     and each seat sees only its own.
@@ -700,7 +767,8 @@ class MatchRunner:
         _agents: Participant per seat.
         _config: Timing, limits, and failure policy.
         _rules: The profile matches run under.
-        _context: The spawn context every worker is started from.
+        _context: The context every worker is started from; see
+            :func:`worker_context`.
         _decision_id: Sequential decision counter for records.
         _agent_seeds: Stream of per-decision agent seeds.
         _fallback: Stream the seeded legal fallback is drawn from.
@@ -738,7 +806,7 @@ class MatchRunner:
         self._agents = dict(agents)
         self._config = config
         self._rules = rules
-        self._context: SpawnContext = multiprocessing.get_context("spawn")
+        self._context: WorkerContext = worker_context()
         self._decision_id = 0
         self._agent_seeds = random.Random(config.agent_seed)
         self._fallback = random.Random(config.fallback_seed)
@@ -748,7 +816,7 @@ class MatchRunner:
 
         The observation's ``legal_moves`` tuple is frozen as the acceptance set
         for this decision: candidates are accepted by membership in it, and it
-        is never recomputed. The worker is spawned with only the specification,
+        is never recomputed. The worker is started with only the specification,
         a fresh seed, this observation, and its deadline. The budget starts
         immediately before the process starts, so startup counts against it, and
         the worker is stopped and reaped on every path out of this method.

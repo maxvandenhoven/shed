@@ -77,6 +77,11 @@ class Agent(ABC):
     needs seeded randomness somewhere -- tie-breaking at minimum -- and the
     factory always supplies a seed for it.
 
+    A strategy should draw every random choice from this generator rather than
+    from module-global randomness. The runner records the seed behind it, so its
+    choices can be explained afterwards, and a decision runs in a worker process
+    whose module-global generators are outside the runner's control.
+
     Attributes:
         _rng: This agent's generator. It is independent of the deck and fallback
             streams and is never seeded from module-global randomness.

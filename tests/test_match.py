@@ -598,6 +598,29 @@ class FloodAgent(ScriptedAgent):
             turn.submit(view.legal_moves[0])
 
 
+class GlobalRngAgent(ScriptedAgent):
+    """Reports what the *module-global* generator produces, then fails.
+
+    No sane strategy should use module-global randomness -- every baseline draws
+    from the generator it was built with -- but an agent could, and a worker
+    forked from a shared server would then inherit one stream for every decision.
+    Raising is how this agent reports the value it saw: the failure record is the
+    only channel that carries text back to the parent.
+    """
+
+    def think(self, view: PlayerView, turn: TurnContext) -> None:
+        """Report the global generator's first draw.
+
+        Args:
+            view: The observation, ignored.
+            turn: The submission channel, unused.
+
+        Raises:
+            RuntimeError: Always, carrying the drawn value.
+        """
+        raise RuntimeError(f"global={random.random()!r}")
+
+
 SCRIPTED_AGENTS: dict[str, type[ScriptedAgent]] = {
     "final": FinalAgent,
     "silent": SilentAgent,
@@ -608,6 +631,7 @@ SCRIPTED_AGENTS: dict[str, type[ScriptedAgent]] = {
     "infinite": InfiniteAgent,
     "final-then-infinite": FinalThenInfiniteAgent,
     "flood": FloodAgent,
+    "global-rng": GlobalRngAgent,
 }
 """Scripted behaviours by name, so a spawned worker can be told which to build."""
 
@@ -850,7 +874,7 @@ def turn_record(**changes: object) -> TurnRecord:
         cleanup_seconds=0.01,
         agent_seed=1234,
     )
-    return replace(clean, **changes)  # type: ignore[arg-type]
+    return replace(clean, **changes)
 
 
 class TestRecords:

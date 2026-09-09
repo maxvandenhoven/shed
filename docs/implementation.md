@@ -632,7 +632,7 @@ There is no application-level cap on the number of submissions. Transport has fi
 
 ### 10.2 Minimal process model
 
-Use one newly spawned process per decision. It receives only `AgentSpec`, a fresh independent agent seed, the `PlayerView` (which already carries that decision's legal moves), its deadline, and a dedicated send endpoint. Instantiate the agent in the worker. Do not pass live agents, `GameState`, match results, or replay seeds. Spawn rather than fork, so no worker inherits a copy of the parent's memory, where the authoritative state lives.
+Use one newly spawned process per decision. It receives only `AgentSpec`, a fresh independent agent seed, the `PlayerView` (which already carries that decision's legal moves), its deadline, and a dedicated send endpoint. Instantiate the agent in the worker. Do not pass live agents, `GameState`, match results, or replay seeds. Never fork a worker from the runner, which would hand it a copy of the parent's memory, where the authoritative state lives: use a `forkserver` where the platform has one — its server is created by fork and immediate exec of a fresh interpreter, so workers fork from a process that never held the game — and `spawn` otherwise. Preloading the runner module in the server is what makes per-decision startup roughly 14 ms rather than 120 ms.
 
 This corrects a limitation of the earlier example: repeatedly spawning a copy of a live random agent can repeatedly reset the same RNG state. Construct a fresh agent with a fresh recorded seed instead.
 

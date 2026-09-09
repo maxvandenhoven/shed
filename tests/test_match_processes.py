@@ -1,9 +1,10 @@
-"""Worker lifecycle tests that actually spawn processes.
+"""Worker lifecycle tests that actually start worker processes.
 
 These are separated from ``tests.test_match`` because they cost real time: every
-decision starts a fresh interpreter, so budgets are set comfortably above process
-startup and assertions are about selected moves and cleanup rather than
-millisecond-perfect timing.
+decision starts a worker, so budgets are set comfortably above worker startup and
+assertions are about selected moves and cleanup rather than millisecond-perfect
+timing. They use :func:`shed.match.worker_context` rather than a start method of
+their own, so whatever the runner ships with is what these tests exercise.
 
 The scripted agents come from ``tests.test_match``; :func:`spawn_scripted_worker`
 is the child entry point that builds one and runs the production worker body, so
@@ -11,12 +12,14 @@ these tests exercise the real pipe context, the real message protocol, the real
 selection policy, and the real cleanup path.
 """
 
+from __future__ import annotations
+
 import multiprocessing
-import os
 import random
 import time
 from dataclasses import dataclass
 from multiprocessing.connection import Connection
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -41,11 +44,62 @@ from shed.match import (
     _shutdown_worker,
     run_agent_worker,
     select_candidate,
+    worker_context,
 )
 from tests.test_match import SCRIPTED_AGENTS
 
+if TYPE_CHECKING:  # These context classes are POSIX-only at runtime.
+    from multiprocessing.context import ForkContext, ForkServerContext, SpawnContext
+
+    type AnyContext = ForkContext | ForkServerContext | SpawnContext
+
 GENEROUS_BUDGET = 5.0
-"""Budget comfortably above process startup, for workers that must finish."""
+"""Budget comfortably above worker startup, for workers that must finish."""
+
+LEAKED_MARKER: str | None = None
+"""Assigned by the parent at run time; a worker must never observe the value.
+
+The module-level default is what a correctly isolated worker sees. Only
+:meth:`TestWorkerIsolation.test_a_worker_cannot_see_the_parents_memory` writes to
+it, and it restores the default afterwards.
+"""
+
+
+def report_marker(sender: Connection) -> None:
+    """Child entry point: report the marker value this module has in the worker.
+
+    Reading the attribute through the module rather than the imported name is
+    what makes the check meaningful: a forked child would see the parent's
+    assignment, while a child that imported this module fresh sees the default.
+
+    Args:
+        sender: The child's end of the pipe to answer on.
+    """
+    from tests import test_match_processes
+
+    sender.send(test_match_processes.LEAKED_MARKER)
+    sender.close()
+
+
+def marker_seen_by_child(context: AnyContext) -> object:
+    """Start one child on ``context`` and return the marker value it reports.
+
+    Args:
+        context: A multiprocessing context to start the child from.
+
+    Returns:
+        Whatever the child read from this module's ``LEAKED_MARKER``.
+    """
+    receiver, sender = context.Pipe(duplex=False)
+    process = context.Process(target=report_marker, args=(sender,), daemon=True)
+    process.start()
+    sender.close()
+    try:
+        assert receiver.poll(30.0), "The child never answered"
+        return receiver.recv()
+    finally:
+        _shutdown_worker(process, receiver, sender)
+
 
 SHORT_BUDGET = 1.0
 """Budget for workers that are meant to be stopped at the deadline."""
@@ -57,10 +111,12 @@ IMPOSSIBLE_BUDGET = 0.001
 """Budget no spawned worker can meet, so every decision falls back."""
 
 
-def spawn_scripted_worker(sender: Connection, view: PlayerView, deadline: float, kind: str) -> None:
+def spawn_scripted_worker(
+    sender: Connection, view: PlayerView, deadline: float, kind: str, seed: int
+) -> None:
     """Child entry point: build one scripted agent and run the worker body.
 
-    Kept at module scope with serializable arguments so a spawned child can
+    Kept at module scope with serializable arguments so a started child can
     import this module and rebuild the call.
 
     Args:
@@ -68,23 +124,27 @@ def spawn_scripted_worker(sender: Connection, view: PlayerView, deadline: float,
         view: The observation to decide on.
         deadline: Monotonic instant the budget ends.
         kind: Which scripted behaviour to build.
+        seed: The decision's agent seed.
     """
-    run_agent_worker(sender, lambda: SCRIPTED_AGENTS[kind](seed=1), view, deadline=deadline)
+    run_agent_worker(sender, lambda: SCRIPTED_AGENTS[kind](seed=seed), view, deadline=deadline)
 
 
 @dataclass(frozen=True, slots=True)
 class SpawnedDecision:
-    """What one really-spawned decision produced.
+    """What one really-started decision produced.
 
     Attributes:
         selection: What the policy selected.
         elapsed: Wall seconds from starting the worker to finishing cleanup.
-        pid: The worker's process ID, kept so a test can prove it was reaped.
+        pid: The worker's process ID, for diagnostics in failure messages.
+        exit_code: The worker's exit status observed while reaping it: zero if it
+            finished on its own, negative if the parent had to signal it.
     """
 
     selection: Selection
     elapsed: float
     pid: int
+    exit_code: int | None
 
 
 def run_spawned_decision(
@@ -93,6 +153,7 @@ def run_spawned_decision(
     *,
     budget: float,
     fallback_seed: int = 0,
+    seed: int = 1,
 ) -> SpawnedDecision:
     """Spawn one scripted worker and run the real selection policy against it.
 
@@ -105,17 +166,19 @@ def run_spawned_decision(
         view: The observation, whose ``legal_moves`` is the acceptance tuple.
         budget: Acceptance budget in seconds.
         fallback_seed: Seed of this decision's fallback stream.
+        seed: This decision's agent seed, which also derives the worker's
+            module-global random stream.
 
     Returns:
         The selection and the timing around it.
     """
-    context = multiprocessing.get_context("spawn")
+    context = worker_context()
     receiver, sender = context.Pipe(duplex=False)
     started = time.perf_counter()
     deadline = time.monotonic() + budget
     process = context.Process(
         target=spawn_scripted_worker,
-        args=(sender, view, deadline, kind),
+        args=(sender, view, deadline, kind, seed),
         daemon=True,
     )
     process.start()
@@ -130,24 +193,42 @@ def run_spawned_decision(
             fallback_rng=random.Random(fallback_seed),
         )
     finally:
-        _shutdown_worker(process, receiver, sender)
-    return SpawnedDecision(selection=selection, elapsed=time.perf_counter() - started, pid=pid)
+        exit_code = _shutdown_worker(process, receiver, sender)
+    return SpawnedDecision(
+        selection=selection,
+        elapsed=time.perf_counter() - started,
+        pid=pid,
+        exit_code=exit_code,
+    )
 
 
-def assert_reaped(pid: int) -> None:
-    """Assert no worker survived the decision.
+def assert_reaped(decision: SpawnedDecision, *, signalled: bool | None = None) -> None:
+    """Assert the decision's worker stopped and was reaped.
+
+    An exit status is the robust evidence here. ``_shutdown_worker`` only reads
+    it after joining, and it closes the process handle, which raises unless the
+    process has actually stopped -- so a status at all means the worker is gone.
+    Checking the PID directly would be racy under ``forkserver``, where the
+    server rather than this process reaps its children.
 
     Args:
-        pid: The worker's process ID.
+        decision: The finished decision.
+        signalled: When given, whether the worker had to be stopped by a signal
+            (negative status) rather than exiting on its own. Only pass it for a
+            worker that provably cannot exit by itself: one that finished
+            normally may still be shutting down when cleanup signals it, so the
+            status of those is a race and is deliberately not asserted.
 
     Raises:
-        AssertionError: If a child is still tracked, or the process still
-            exists. A recycled PID could in principle mask the second check;
-            within one short test run that is vanishingly unlikely.
+        AssertionError: If a worker is still tracked, never stopped, or stopped
+            in the wrong way.
     """
     assert not multiprocessing.active_children(), "A worker outlived its decision"
-    with pytest.raises(ProcessLookupError):
-        os.kill(pid, 0)
+    assert decision.exit_code is not None, f"Worker {decision.pid} was never reaped"
+    if signalled is not None:
+        assert (decision.exit_code < 0) is signalled, (
+            f"Worker {decision.pid} exited with {decision.exit_code}"
+        )
 
 
 def setup_view_for(seed: int) -> PlayerView:
@@ -196,7 +277,7 @@ class TestSpawnedWorkers:
         assert decision.selection.accepted == 1
         assert not decision.selection.used_fallback
         assert decision.elapsed < GENEROUS_BUDGET
-        assert_reaped(decision.pid)
+        assert_reaped(decision)
 
     def test_returning_without_submitting_uses_the_fallback(self, view: PlayerView) -> None:
         """A worker that returns closes the turn; the fallback supplies the move."""
@@ -205,7 +286,7 @@ class TestSpawnedWorkers:
         assert decision.selection.used_fallback
         assert decision.selection.move in view.legal_moves
         assert decision.elapsed < GENEROUS_BUDGET
-        assert_reaped(decision.pid)
+        assert_reaped(decision)
 
     def test_repeated_submissions_leave_the_latest_standing(self, view: PlayerView) -> None:
         """Every candidate is accepted, and the last one is the decision."""
@@ -213,7 +294,7 @@ class TestSpawnedWorkers:
         assert decision.selection.accepted == len(view.legal_moves)
         assert decision.selection.move == view.legal_moves[-1]
         assert decision.selection.reason is CloseReason.RETURNED
-        assert_reaped(decision.pid)
+        assert_reaped(decision)
 
     def test_an_exception_after_a_submission_keeps_that_candidate(self, view: PlayerView) -> None:
         """A crash is recorded, and the candidate it already sent is still used."""
@@ -223,7 +304,7 @@ class TestSpawnedWorkers:
         assert decision.selection.failure is not None
         assert decision.selection.failure.exception == "RuntimeError"
         assert not decision.selection.used_fallback
-        assert_reaped(decision.pid)
+        assert_reaped(decision)
 
     def test_a_construction_failure_reaches_the_parent(self, view: PlayerView) -> None:
         """An agent that cannot be built fails inside its own worker."""
@@ -232,7 +313,7 @@ class TestSpawnedWorkers:
         assert decision.selection.failure is not None
         assert decision.selection.failure.exception == "ValueError"
         assert decision.selection.used_fallback
-        assert_reaped(decision.pid)
+        assert_reaped(decision)
 
     def test_infinite_computation_is_stopped_at_the_deadline(self, view: PlayerView) -> None:
         """Polling cannot stop a spinning worker, so the parent kills it."""
@@ -241,7 +322,7 @@ class TestSpawnedWorkers:
         assert decision.selection.used_fallback
         assert decision.selection.move in view.legal_moves
         assert SHORT_BUDGET <= decision.elapsed < SHORT_BUDGET + CLEANUP_SLACK
-        assert_reaped(decision.pid)
+        assert_reaped(decision, signalled=True)
 
     def test_a_candidate_at_the_deadline_is_a_decision_not_a_failure(
         self, view: PlayerView
@@ -252,7 +333,7 @@ class TestSpawnedWorkers:
         assert decision.selection.reason is CloseReason.DEADLINE
         assert not decision.selection.used_fallback
         assert decision.selection.failure is None
-        assert_reaped(decision.pid)
+        assert_reaped(decision, signalled=True)
 
     def test_finalizing_then_computing_forever_still_closes_early(self, view: PlayerView) -> None:
         """A final candidate ends the turn; the agent cannot talk its way out of it."""
@@ -261,20 +342,57 @@ class TestSpawnedWorkers:
         assert decision.selection.reason is CloseReason.FINAL
         assert decision.selection.accepted == 1
         assert decision.elapsed < GENEROUS_BUDGET
-        assert_reaped(decision.pid)
+        assert_reaped(decision, signalled=True)
 
     def test_a_flooded_pipe_cannot_affect_a_later_decision(self, view: PlayerView) -> None:
         """Each decision gets a fresh pipe, so unread candidates die with it."""
         flooded = run_spawned_decision("flood", view, budget=SHORT_BUDGET)
         assert flooded.selection.accepted > 1
-        assert_reaped(flooded.pid)
+        assert_reaped(flooded, signalled=True)
 
         later = setup_view_for(1)
         assert not set(later.legal_moves) & set(view.legal_moves), "The deals must differ"
         decision = run_spawned_decision("final", later, budget=GENEROUS_BUDGET)
         assert decision.selection.move == later.legal_moves[0]
         assert decision.selection.accepted == 1
-        assert_reaped(decision.pid)
+        assert_reaped(decision)
+
+
+class TestWorkerIsolation:
+    """The property the start method exists to protect."""
+
+    def test_a_worker_cannot_see_the_parents_memory(self) -> None:
+        """A worker must not inherit the parent's objects, where hidden state lives.
+
+        The control matters: under plain ``fork`` the child *does* observe the
+        parent's assignment. Asserting only the isolated case could pass for the
+        wrong reason, so this checks the leak is detectable before checking that
+        the shipped context prevents it.
+        """
+        global LEAKED_MARKER
+        LEAKED_MARKER = "parent-only"
+        try:
+            if "fork" in multiprocessing.get_all_start_methods():
+                leaked = marker_seen_by_child(multiprocessing.get_context("fork"))
+                assert leaked == "parent-only", "The control failed; the test proves nothing"
+            assert marker_seen_by_child(worker_context()) is None
+        finally:
+            LEAKED_MARKER = None
+
+    def test_workers_do_not_share_one_module_global_random_stream(self, view: PlayerView) -> None:
+        """Forking from a shared server must not hand every decision one stream.
+
+        Both scripted workers report what the module-global generator produces,
+        through the only channel they have. Equal values would mean the global
+        stream was inherited unchanged, which is the trap the design warns about.
+        """
+        first = run_spawned_decision("global-rng", view, budget=GENEROUS_BUDGET)
+        second = run_spawned_decision("global-rng", view, budget=GENEROUS_BUDGET, seed=2)
+        assert first.selection.failure is not None
+        assert second.selection.failure is not None
+        assert first.selection.failure.message != second.selection.failure.message
+        assert_reaped(first)
+        assert_reaped(second)
 
 
 class TestRunnerDecisions:
