@@ -1,7 +1,8 @@
 """Tests for legal-move generation in PLAY, using crafted valid states.
 
-Play resolution does not exist yet, so these tests build valid PLAY positions
-directly and inspect what the generator offers. They never apply a play.
+These tests build valid PLAY positions directly and inspect what the generator
+offers, plus the validation that guards ``apply_move``. Resolving a play is
+covered in ``test_play.py``.
 """
 
 from copy import deepcopy
@@ -328,31 +329,33 @@ def test_generation_does_not_mutate_the_state(picker: DeckPicker) -> None:
     assert state == before
 
 
-def test_play_resolution_is_not_implemented_and_says_so(picker: DeckPicker) -> None:
-    """A legal play is refused explicitly rather than faking a transition."""
+def test_illegal_play_moves_are_rejected_without_mutation(picker: DeckPicker) -> None:
+    """Validation runs before any mutation, whatever makes the move illegal."""
     state = build_play_state(
         picker,
-        hands={PlayerId(0): picker.take(Rank.SIX, 2), PlayerId(1): []},
-    )
-    before = deepcopy(state)
-    move = state.get_legal_moves()[0]
-    with pytest.raises(NotImplementedError, match="PLAY resolution is not implemented"):
-        state.apply_move(move)
-    assert state == before
-
-
-def test_illegal_play_moves_are_rejected_before_the_unimplemented_path(picker: DeckPicker) -> None:
-    """Validation still runs first: an illegal batch is an illegal move."""
-    state = build_play_state(
-        picker,
-        hands={PlayerId(0): picker.take(Rank.SIX, 2), PlayerId(1): []},
+        hands={PlayerId(0): picker.take(Rank.SIX, 2), PlayerId(1): picker.take(Rank.FOUR, 1)},
         constraint=AtLeast(Rank.KING),
     )
+    before = deepcopy(state)
     for move in (
-        Play(Zone.HAND, Rank.SIX, 1),
-        Play(Zone.HAND, Rank.KING, 1),
-        Play(Zone.FACE_UP, Rank.SIX, 1),
-        Reveal(SlotId(0)),
+        Play(Zone.HAND, Rank.SIX, 1),  # Rank below the constraint.
+        Play(Zone.HAND, Rank.KING, 1),  # Rank the actor does not hold.
+        Play(Zone.HAND, Rank.SIX, 3),  # More cards than the hand holds.
+        Play(Zone.FACE_UP, Rank.SIX, 1),  # Wrong source zone.
+        Reveal(SlotId(0)),  # Wrong zone entirely; the hand is not empty.
     ):
         with pytest.raises(IllegalMoveError):
             state.apply_move(move)
+        assert state == before
+
+
+def test_voluntary_pickup_is_rejected(picker: DeckPicker) -> None:
+    """Picking up beside a playable batch is not a decision in this profile."""
+    state = build_play_state(
+        picker,
+        hands={PlayerId(0): picker.take(Rank.SIX, 2), PlayerId(1): picker.take(Rank.FOUR, 1)},
+    )
+    before = deepcopy(state)
+    with pytest.raises(IllegalMoveError):
+        state.apply_move(PickUp())
+    assert state == before
