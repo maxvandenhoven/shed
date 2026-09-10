@@ -211,6 +211,50 @@ Ordered by expected gain per unit of work, and each one is testable on its own:
    `implementation.md` §16 sketches the belief-sampling interface and recommends
    Monte Carlo rollouts before information-set search.
 
+## What a long match costs, and why
+
+The mirror run took 3 h 22 m against the random matchup's 16 minutes. Three
+things multiply, and the third is the one that surprises:
+
+1. **Decision count.** The mirror averaged 1042 play decisions per match against
+   the random matchup's 123. The 13 truncated matches alone account for 130000
+   decisions — 62% of the run's 208506 — from 6.5% of its matches.
+2. **One process per decision.** Roughly 35 ms of worker startup, paid whether
+   the agent thinks for a microsecond or the whole budget. It buys the isolation
+   the design asks for (§10.2), and it means runtime tracks the decision count,
+   not the thinking.
+3. **The observation grows with the match.** The runner ships the actor's whole
+   filtered history inside the `PlayerView` to a fresh worker every decision, so
+   the per-decision transport cost is linear in the match length and the cost of
+   a *match* is quadratic in it:
+
+   | history events | pickled view | pickle + unpickle |
+   | --- | --- | --- |
+   | 0 | 1.0 KB | 0.18 ms |
+   | 1000 | 20.8 KB | 4.17 ms |
+   | 5000 | 97.2 KB | 21.40 ms |
+   | 10000 | 192.7 KB | 50.56 ms |
+
+At ordinary lengths this is invisible: measured across a 20-match run, decisions
+0–24 cost a median 35.7 ms against 36.8 ms at decision 150 and beyond. At 10000
+decisions the last decisions pay about 50 ms of serialization on top of startup,
+and one truncated match pushes on the order of a gigabyte through its pipes. The
+mean selection time rising from 35 ms to 56 ms between the two runs is this
+effect showing up in the report.
+
+Two consequences for anyone running the next comparison:
+
+- **Set `--max-play-decisions` to something near the real distribution.** The
+  median finished mirror game is 75 decisions; a limit of 1000 still catches every
+  genuine game and flags a runaway just as clearly, and would have cut that run
+  from three hours to well under one. The 10000 default is a safety net for a
+  single match, not a budget for two hundred.
+- **`shed.match`'s history-per-decision copy is now worth revisiting.**
+  `implementation.md` §6 explicitly permits it for the first release; this is the
+  first measurement of where it stops being cheap. A fix means a persistent worker
+  per seat fed history deltas, or bounding what the view carries — both are design
+  changes, and both need the benchmark of §16 first.
+
 ## How to measure a change cheaply
 
 Do not use the timed gauntlet as the inner loop. It starts a worker per decision,
