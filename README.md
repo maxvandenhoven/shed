@@ -3,7 +3,9 @@
 An engine, interchangeable agents, and an evaluation gauntlet for **Shed**, a
 hidden-information card game for 2–5 players.
 
-The full design contract lives in [`docs/implementation.md`](docs/implementation.md).
+The full design contract lives in [`docs/implementation.md`](docs/implementation.md), and
+[`docs/agent-baselines.md`](docs/agent-baselines.md) records what the shipped baselines
+actually score and where a stronger agent should start.
 
 ## Status
 
