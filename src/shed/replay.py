@@ -104,6 +104,7 @@ from shed.match import (
 
 __all__ = [
     "SUPPORTED_PROFILES",
+    "JsonObject",
     "SUPPORTED_SCHEMAS",
     "Replay",
     "ReplayCheck",
@@ -119,6 +120,7 @@ __all__ = [
     "encode_constraint",
     "encode_event",
     "encode_move",
+    "encode_spec",
     "match_deck",
     "match_document",
     "read_replay",
@@ -473,7 +475,7 @@ def _encode_config(config: MatchConfig) -> JsonObject:
     }
 
 
-def _encode_spec(spec: AgentSpec) -> JsonObject:
+def encode_spec(spec: AgentSpec) -> JsonObject:
     """Encode one participant specification.
 
     Args:
@@ -566,7 +568,7 @@ def match_document(result: MatchResult, *, source_revision: str | None = None) -
             "dealer": int(metadata.dealer),
             "deal_seed": metadata.deal_seed,
             "deck": _encode_cards(deck),
-            "agents": [_encode_spec(spec) for spec in metadata.agents],
+            "agents": [encode_spec(spec) for spec in metadata.agents],
             "config": _encode_config(metadata.config),
         },
         "result": {

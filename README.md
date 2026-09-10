@@ -3,7 +3,9 @@
 An engine, interchangeable agents, and an evaluation gauntlet for **Shed**, a
 hidden-information card game for 2–5 players.
 
-The full design contract lives in [`docs/implementation.md`](docs/implementation.md).
+The full design contract lives in [`docs/implementation.md`](docs/implementation.md), and
+[`docs/agent-baselines.md`](docs/agent-baselines.md) records what the shipped baselines
+actually score and where a stronger agent should start.
 
 ## Status
 
@@ -23,7 +25,8 @@ The engine is being built in milestones. What exists today:
 | Random and greedy baselines across every phase | Implemented |
 | Timed match runner: selection policy, spawned workers, records | Implemented |
 | Versioned JSON replay, replay verification, `play` and `replay` commands | Implemented |
-| Gauntlet, `gauntlet` and `benchmark` commands | Not started |
+| Sequential gauntlet: schedules, seed streams, accounting, `gauntlet` command | Implemented |
+| Engine benchmark and the `benchmark` command | Not started |
 
 The engine works on strictly typed domain objects: constructors take a `Rank`,
 not an integer they convert into one, and check domain invariants only — `ty`
@@ -189,6 +192,48 @@ deck order, and each private draw — and is a trusted post-match artifact. The
 console output is the opposite: `describe_event` reports private events by their
 public count, so summarizing a replay never dumps what the players could not see.
 
+`shed.gauntlet` compares agents by playing many of those matches. It schedules,
+seeds, and counts; every authoritative state still lives inside a `MatchRunner`,
+and no rule is reimplemented there:
+
+```python
+from shed.cli import build_participants
+from shed.gauntlet import GauntletConfig, build_schedule, run_gauntlet
+
+agents = build_participants(["random", "greedy"])  # random-0, greedy-1
+config = GauntletConfig(deals=10, seed=42, seconds_per_turn=0.5)
+
+build_schedule(agents, config)  # pure: 20 entries, seeds included, before anything is played
+run = run_gauntlet(agents, config)
+run.report.status.finished  # 20 — truncated and failed matches are counted apart
+run.report.agents[1].wins  # Rate(count=16, total=20): a count never travels without its denominator
+```
+
+Each deal in the bank is played once per **cyclic seat rotation**, so a lineup of
+two agents and 10 deals is 20 matches: the same deck and the same dealer, with
+the participants shifted one seat. That gives every participant every seat on
+every deal, which is what makes the seat breakdown a fair comparison. It is not
+every seating permutation for three or more agents — the participants keep their
+cyclic order relative to each other — so it controls for seat advantage, not for
+who sits to whose left. Permutation schedules are future work.
+
+Matches are played one at a time. The budget an agent is given is wall time, so
+two matches thinking at once would measure the machine's load rather than the
+strategies.
+
+Seeds come from `derive_seed`, a SHA-256 over a canonical JSON payload — not
+Python's `hash()`, which is randomized per interpreter, so a schedule reproduces
+in a fresh process. The deck, agent, and fallback streams are derived under
+separate purposes: rotations of one deal share the deck seed and nothing else,
+and no agent's seed is a function of the deal it is playing.
+
+Accounting is deliberately unforgiving. Finished, truncated, agent-failed, and
+engine-failed matches are counted separately and must add up to the number
+scheduled, or `summarize` refuses the run. Win rates are measured over finished
+matches only, so a truncated match is never quietly a loss, and every rate
+carries the denominator it came from — including `0/0`, which reports as `n/a`
+rather than as a zero win rate.
+
 ## Requirements
 
 - [uv](https://docs.astral.sh/uv/) (manages the Python 3.12 toolchain, the
@@ -222,10 +267,11 @@ The review gates are the same commands with `ruff format --check .` in place of
 | `src/shed/engine/` | Value types, events, and state with the game operations |
 | `src/shed/agents/` | Agent interface, specification, factory, and the baselines |
 | `src/shed/match.py` | Timed decisions: selection policy, worker, pipe context, runner |
+| `src/shed/gauntlet.py` | Sequential evaluation: schedules, seeds, accounting, report file |
 | `src/shed/replay.py` | Versioned JSON replay: the whole codec, and verification |
 | `src/shed/cli.py` | Shared command-line logic: lineups, narration, summaries |
 | `tests/` | pytest suite |
-| `scripts/` | Command-line entry points: `play.py`, `replay.py` |
+| `scripts/` | Command-line entry points: `play.py`, `replay.py`, `gauntlet.py` |
 | `docs/implementation.md` | Implementation specification |
 | `results/` | Generated local outputs, ignored by Git |
 
@@ -294,11 +340,71 @@ exactly as stored, because position decides what happens next in both. Sorting
 is presentation only: the engine's orders are untouched and a replay still
 compares them exactly, so a wrong one cannot hide behind a tidy console.
 
-Two commands from the specification belong to the next milestone and do not
+### Comparing agents
+
+```bash
+uv run scripts/gauntlet.py --agents random greedy --deals 10 --seed 42 --seconds-per-turn 0.5 --output results/gauntlet.json
+```
+
+The lineup holds two to five agents and repeated kinds get distinct labels, so
+`--agents greedy greedy` is a readable mirror match. `--deals` sizes the bank,
+`--dealer`, `--max-play-decisions`, and `--strict-failures` reach the rest of the
+runner's configuration, and `--quiet` silences the per-match progress, which
+otherwise goes to standard error while the table goes to standard output. The
+command exits `2` on arguments that describe no runnable gauntlet and `1` when a
+match aborted or the report could not be written; a truncated match is a limit
+being reached, not a failure.
+
+```
+$ uv run scripts/gauntlet.py --agents random greedy --deals 10 --seed 42 --seconds-per-turn 0.5 --quiet
+shed-v1 | 2 agents | 10 deals x 2 rotations = 20 matches | seed 42 | dealer 0 | 0.5s per decision
+status: 20 finished | 0 truncated | 0 agent failed | 0 engine failed (of 20 scheduled)
+
+wins among finished matches:
+agent       kind           wins        seat 0        seat 1
+random-0  random   4/20 (0.200)  2/10 (0.200)  2/10 (0.200)
+greedy-1  greedy  16/20 (0.800)  8/10 (0.800)  8/10 (0.800)
+
+random-0 against greedy-1: 4/20 (0.200)
+greedy-1 against random-0: 16/20 (0.800)
+
+decisions:
+agent     decisions  fallbacks  rejected  crashes   mean  median
+random-0       1271          0         0        0  37 ms   36 ms
+greedy-1       1298          0         0        0  37 ms   36 ms
+all            2569          0         0        0  37 ms   36 ms
+
+play decisions per match: mean 126.5 | median 107.5
+```
+
+Those numbers are one 20-match run against a random baseline, not a benchmark of
+the heuristic. Rotations share deals, so results across them are correlated;
+treating each rotation as an independent sample would understate the uncertainty.
+
+`--output` writes the same numbers as JSON, and embeds each match's full replay
+document — the format `play.py` writes, not a second, weaker one — so a finished
+match from a gauntlet file verifies exactly like a saved single match:
+
+```python
+import json
+from pathlib import Path
+
+from shed.replay import decode_replay, verify_replay
+
+document = json.loads(Path("results/gauntlet.json").read_text(encoding="utf-8"))
+for entry in document["matches"]:
+    if entry["status"] == "finished":
+        assert verify_replay(decode_replay(entry["replay"])).ok
+```
+
+That costs size — roughly 180 KB per match — so `--no-replays` drops the embedded
+documents when only the aggregate is wanted. What is left keeps each match's
+schedule entry, seeds, status, and winner, but can no longer be replayed.
+
+One command from the specification belongs to a later milestone and does not
 exist yet:
 
 ```bash
-uv run scripts/gauntlet.py --agents random greedy --deals 100 --seed 42 --output results/gauntlet.json
 uv run scripts/benchmark.py --iterations 10000
 ```
 
