@@ -1,6 +1,6 @@
 # Shed: implementation specification
 
-Status: implementation-ready design, not an implemented or benchmarked codebase.  
+Status: implemented. This document is the normative contract for the first release, and the code in this repository satisfies it; sections amended during implementation say so where they supersede an earlier sketch.  
 Specification date: 2026-09-08.  
 Rules profile: `shed-v1`. Replay schema: `1`.
 
@@ -137,19 +137,27 @@ Use a normal `src` layout with one namespace package root, `shed`. Avoid separat
 | `src/shed/match.py` | Match runner, process worker, pipe context, turn-selection helper |
 | `src/shed/gauntlet.py` | Schedules and aggregation |
 | `src/shed/replay.py` | Versioned JSON serialization and replay validation |
+| `src/shed/benchmark.py` | Engine-only benchmark fixtures, measurements, and report |
+| `src/shed/cli.py` | Logic the command-line scripts share: lineups, narration, summaries |
 | `scripts/play.py` | Run one match |
 | `scripts/gauntlet.py` | Run a sequential evaluation |
 | `scripts/replay.py` | Verify or summarize a saved replay |
-| `scripts/benchmark.py` | Engine-only benchmark fixtures and measurements |
+| `scripts/benchmark.py` | Run the engine benchmark |
 | `tests/engine/` | Rules, views, invariants, undo, setup tests |
 | `tests/agents/` | Baseline behavior and interface tests |
 | `tests/test_match.py` | Submission, timing, worker lifecycle, fallback tests |
 | `tests/test_gauntlet.py` | Schedules, seeds, accounting |
 | `tests/test_replay.py` | Serialization and replay round trips |
+| `tests/test_cli.py` | Shared console logic and the documented commands |
+| `tests/test_benchmark.py` | Fixtures, measurement shape, and the benchmark command |
 | `tests/conftest.py` | Small deterministic fixtures |
 | `results/` | Generated local outputs, ignored by Git |
 
 Imports use `from shed.engine import ...`, never `from src...`. Scripts are thin argument parsers; reusable logic lives under `src/shed`. Keep multiprocessing entry points at module scope and script startup behind `if __name__ == "__main__":`.
+
+**Final dependency direction.** Every import runs one way and there is no cycle, so nothing is broken by a function-local import: `engine.types` → `engine.events` → `engine.state`; `agents.base` → `agents.random`/`agents.greedy` → `agents.factory`; then `match` → `replay` → `gauntlet`, each depending on the layers before it, with `cli` last, above all of them. `benchmark` sits outside that stack and depends on the engine alone: it deliberately does not import `match`, so no measurement can include worker startup, and `cli` imports it only to render its report. The two function-local imports in shipped code are both deliberate and neither breaks a cycle: `shed/__init__.py` defers `importlib.metadata` so importing the package stays cheap in a per-decision worker, and `engine/events.py` imports `GameState` only under `TYPE_CHECKING`.
+
+**`engine/rules.py` is not part of this layout.** The earlier sketch put a `Ruleset` class and a `legal_moves(view)` function there. With the operations on `GameState`, which already carries its `RulesConfig`, that module would hold nothing: legality reads the state directly and lives beside the state it reads, and the rank predicate, constraint transition, and burn rule are small cohesive helpers in `state.py` rather than a second module importing it back. `cli.py` is the one cohesive helper module the layout gained instead, and it is presentation, not rules.
 
 ## 5. Supporting types
 
@@ -966,6 +974,15 @@ The conversation expected Shed's engine to be lighter per simulated decision tha
 Rank/count move generation is O(H + M), with M ≤ H. A single deck bounds rank multiplicities and total card transfer sizes. Full-state snapshot undo and repeatedly copied history may dominate otherwise cheap operations. Benchmark before replacing them.
 
 Measure legal generation, apply/undo pairs, observation construction, and engine-only full random playouts separately. Exclude worker startup and timed waiting from engine throughput. Use representative hand sizes, face-up/face-down states, pickups, and burns; report Python/platform and fixture sizes. Use `time.perf_counter()` and avoid brittle speed thresholds in unit tests.
+
+`shed.benchmark` implements exactly that, and `scripts/benchmark.py` is its argument parser. Two details of the implementation are worth stating, because a reader could otherwise misread a row:
+
+- **Observation includes legality.** `observe()` fills `PlayerView.legal_moves` for the acting seat on every call, so an observation row is the matching legality row plus the snapshot of the public position around it. The two are printed together so the inclusion is visible. History is passed in already filtered and stored by reference, so its length does not appear in that cost; filtering it is the runner's.
+- **The legality rows build no view at all.** They call `get_legal_moves()` on the state, which is the whole point of having the generator read the state rather than an observation.
+
+Fixtures are discovered from seeded games rather than hand-written, so they are positions the engine actually reaches and the same seed measures the same ones. The engine-only claim is structural, not a convention: the module does not import `shed.match`, `shed.agents`, or `multiprocessing`, and a test asserts that by reading its imports.
+
+What the first measurements showed, on one machine and one interpreter (CPython 3.12.3, Linux, three players): snapshot undo dominates everything else by roughly two orders of magnitude. Legal-move generation costs 2–26 µs across the fixtures, an observation 11–35 µs, and an apply/undo pair about 1 ms — most of it the two deep copies undo needs, since a bare apply inside a playout costs roughly half the pair. That is the expectation above confirmed — "full-state snapshot undo ... may dominate otherwise cheap operations" — and it says where a future search should look first. It is still not a comparison with Hive: nothing here measured Hive, and no such claim should be made without doing so.
 
 Future search must handle hidden information, more than two players, and extra turns. Do not transfer two-player negamax unchanged. A later interface can be:
 
