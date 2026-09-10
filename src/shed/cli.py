@@ -39,6 +39,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from shed.agents import AGENT_KINDS, AgentSpec
+from shed.benchmark import MAX_PLAYOUT_DECISIONS, BenchmarkReport, Timing
 from shed.engine import (
     DEFAULT_RULES,
     ArrangementCommitted,
@@ -69,6 +70,7 @@ __all__ = [
     "ConsoleStyle",
     "Visibility",
     "console_style",
+    "benchmark_summary",
     "build_lineup",
     "build_participants",
     "card_text",
@@ -939,3 +941,195 @@ def gauntlet_progress(record: MatchRecord, total: int, participants: Sequence[Ag
         f"rotation {scheduled.rotation}) | {seating} | {ending} | "
         f"{record.result.play_decisions} play decisions"
     )
+
+
+DURATION_UNITS: tuple[tuple[float, str], ...] = (
+    (1.0, "s"),
+    (1e-3, "ms"),
+    (1e-6, "us"),
+    (1e-9, "ns"),
+)
+"""Scales a benchmark duration may be printed in, largest first."""
+
+
+def _duration_scale(seconds: float) -> tuple[float, str]:
+    """Choose the largest unit that leaves a duration readable.
+
+    A legal-move generation and a whole playout differ by four orders of
+    magnitude, so one fixed unit for both would print either a pile of zeros or
+    a number too long to scan.
+
+    Args:
+        seconds: The longest duration the unit has to cover.
+
+    Returns:
+        The divisor and its name.
+    """
+    for scale, unit in DURATION_UNITS:
+        if seconds >= scale:
+            return scale, unit
+    return DURATION_UNITS[-1]
+
+
+def _duration_text(seconds: float, scale: tuple[float, str]) -> str:
+    """Render one duration in a chosen unit.
+
+    The unit is passed in rather than chosen per value, so a column of durations
+    is all in the same unit and its magnitudes can be compared by eye.
+
+    Args:
+        seconds: The duration.
+        scale: The divisor and unit name from :func:`_duration_scale`.
+
+    Returns:
+        The duration with its unit, such as ``6.90 us``.
+    """
+    return f"{seconds / scale[0]:.2f} {scale[1]}"
+
+
+def _per_second_text(rate: float) -> str:
+    """Render a throughput with thousands separators.
+
+    Args:
+        rate: Operations per second.
+
+    Returns:
+        The rate rounded to whole operations, such as ``144,926``.
+    """
+    return f"{rate:,.0f}"
+
+
+def _timing_row(timing: Timing, scale: tuple[float, str]) -> list[str]:
+    """Build one row of a measurement table.
+
+    Args:
+        timing: The measured row.
+        scale: The unit its table prints durations in.
+
+    Returns:
+        The subject, the operation count, the per-operation duration, the
+        throughput, and the spread between the fastest and slowest repeat.
+    """
+    return [
+        timing.subject,
+        f"{timing.operations:,}",
+        _duration_text(timing.per_operation, scale),
+        _per_second_text(timing.per_second),
+        f"{timing.spread:.2f}",
+    ]
+
+
+def _measurement_table(
+    report: BenchmarkReport, measurement: str, unit: str, *, label: str
+) -> list[str]:
+    """Build the table for one of the four measurements.
+
+    Args:
+        report: The completed run.
+        measurement: Which measurement's rows to take.
+        unit: Plural name of one operation, for the column headers.
+        label: Header of the first column.
+
+    Returns:
+        The header line and one line per measured row, in report order. Every
+        duration in the table shares the unit its slowest row needs.
+    """
+    timings = [timing for timing in report.timings if timing.measurement == measurement]
+    scale = _duration_scale(max((timing.per_operation for timing in timings), default=0.0))
+    rows = [_timing_row(timing, scale) for timing in timings]
+    return _table([label, unit, f"per {unit[:-1]}", f"{unit}/s", "spread"], rows)
+
+
+def _fixture_table(report: BenchmarkReport) -> list[str]:
+    """Build the table of fixture sizes.
+
+    A timing means nothing without the position it was measured on, so the sizes
+    that drive the work -- the actor's zones, the piles, the moves generated, and
+    the history handed to an observation -- are printed before any duration.
+
+    Args:
+        report: The completed run.
+
+    Returns:
+        The header line and one line per fixture, in discovery order.
+    """
+    rows = []
+    for fixture in report.fixtures:
+        sizes = fixture.sizes
+        rows.append(
+            [
+                fixture.name,
+                fixture.state.phase.value,
+                str(sizes["hand"]),
+                str(sizes["face_up"]),
+                str(sizes["face_down"]),
+                str(sizes["draw"]),
+                str(sizes["discard"]),
+                str(sizes["legal_moves"]),
+                str(sizes["history"]),
+            ]
+        )
+    headers = [
+        "fixture",
+        "phase",
+        "hand",
+        "face up",
+        "face down",
+        "draw",
+        "discard",
+        "moves",
+        "history",
+    ]
+    return _table(headers, rows)
+
+
+def benchmark_summary(report: BenchmarkReport) -> list[str]:
+    """Summarize a benchmark run for the console.
+
+    The layout puts provenance first -- machine, interpreter, and how much of
+    each measurement ran -- then the fixture sizes, then one table per
+    measurement, and finally the caveats. Every duration is the fastest of the
+    repeats, and the spread beside it says how much the slowest differed, so a
+    noisy machine is visible rather than averaged away.
+
+    Args:
+        report: The completed run.
+
+    Returns:
+        The summary lines, without a trailing newline.
+    """
+    config = report.config
+    machine = report.platform
+    playouts = [timing for timing in report.timings if timing.measurement == "playout"]
+    games = playouts[0].operations if playouts else 0
+    return [
+        f"{report.rules_profile} engine benchmark | {machine.implementation} "
+        f"{machine.python_version} on {machine.system} ({machine.machine}) | "
+        f"shed {machine.package_version}",
+        f"seed {config.seed} | {config.players} players | {config.repeats} repeats | "
+        f"per repeat: {config.iterations:,} calls, {config.transitions:,} apply/undo pairs, "
+        f"{config.playouts:,} playouts",
+        "",
+        "fixtures:",
+        *_fixture_table(report),
+        "",
+        "legal moves (get_legal_moves; no view is built):",
+        *_measurement_table(report, "legality", "calls", label="fixture"),
+        "",
+        "transitions (apply_move then undo_move, timed as one pair):",
+        *_measurement_table(report, "transition", "pairs", label="fixture"),
+        "",
+        "observations (observe; includes the acting seat's legal moves):",
+        *_measurement_table(report, "observation", "calls", label="fixture"),
+        "",
+        "engine-only playouts (deal, legal moves, apply; no view, agent, or worker):",
+        *_measurement_table(report, "playout", "operations", label="subject"),
+        "",
+        f"{report.playout_decisions:,} decisions over {games} random "
+        f"{config.players}-player games, {report.truncated_playouts} truncated at "
+        f"{MAX_PLAYOUT_DECISIONS:,} decisions.",
+        "Each duration is the fastest repeat; spread is the slowest divided by the fastest.",
+        "These numbers describe this machine and this interpreter. Nothing here is a",
+        "threshold, no test asserts a duration, and none of it is a comparison with",
+        "another engine.",
+    ]
