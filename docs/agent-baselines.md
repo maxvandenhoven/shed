@@ -23,10 +23,11 @@ uv run scripts/gauntlet.py --agents greedy greedy --deals 100 --seed 42 \
     --seconds-per-turn 0.5 --quiet --no-replays --output results/greedy-vs-greedy.json
 ```
 
-Every match finished: no truncations, no agent or engine failures, no fallbacks,
-no rejected submissions, no worker crashes. Both baselines submit one final move
-per decision, so the budget never bound and the selection-time column measures
-worker startup rather than thinking.
+No match failed in either run: no agent failures, no engine failures, no rejected
+submissions, no worker crashes. The mirror run did truncate 13 matches, which is
+a finding rather than a fault and is covered below. Both baselines submit one
+final move per decision, so the budget almost never bound and the selection-time
+column measures worker startup rather than thinking.
 
 ## Results
 
@@ -45,17 +46,69 @@ greedy-1  greedy  160/200 (0.800)  76/100 (0.760)  84/100 (0.840)
 Two things derived from the same report file:
 
 - Match length splits with the result. Median play decisions is **96.5 when
-  greedy wins and 114 when it loses**: greedy loses the long games.
+  greedy wins and 114 when it loses**: greedy loses the long games. The mirror
+  run below shows what happens when nothing stops a long game.
 - Per deal, greedy took **both** rotations on 63 deals, **split** 34, and lost
   both on **3**. The deal itself rarely decides the matchup; what happens inside
   a particular game does.
 
 The greedy-vs-greedy mirror is a control rather than a comparison — same
-strategy, same deals, rotated seats — so it measures how much of a result is
-seat and deal luck rather than play. It should land near even; a large deviation
-would point at a seat advantage or a scheduling bug, not at a better agent.
+strategy, same deals, rotated seats — so it measures how much of a result is seat
+and deal luck rather than play. It passed as a control, and failed as a game:
 
-<!-- MIRROR RESULT: pending; the run is still in flight. -->
+```
+shed-v1 | 2 agents | 100 deals x 2 rotations = 200 matches | seed 42 | dealer 0 | 0.5s per decision
+status: 187 finished | 13 truncated | 0 agent failed | 0 engine failed (of 200 scheduled)
+
+wins among finished matches:
+agent       kind             wins         seat 0         seat 1
+greedy-0  greedy   84/187 (0.449)  42/94 (0.447)  42/93 (0.452)
+greedy-1  greedy  103/187 (0.551)  51/93 (0.548)  52/94 (0.553)
+```
+
+The 84–103 split is within noise for a fair coin (z = 1.39, |z| < 1.96), and the
+seat breakdown is flat: each participant scores about the same in both seats, so
+the small difference sits with the participant rather than the seat. Cyclic
+rotation is therefore not manufacturing a seat advantage, which is what the
+control was for.
+
+### The mirror does not terminate
+
+**13 of 200 mirror matches hit the 10,000 play-decision limit and were
+truncated.** The random matchup truncated none, and its longest game was 921 play
+decisions.
+
+| | random vs greedy | greedy vs greedy |
+| --- | --- | --- |
+| Truncated | 0 / 200 | 13 / 200 |
+| Median play decisions (finished) | 102 | 75 |
+| Mean play decisions (finished) | 122.8 | 417.7 |
+| Longest finished match | 921 | 9962 |
+| Matches over 1000 play decisions | 0 | 28 |
+
+The distribution is bimodal rather than merely heavy-tailed: mirror games are
+*shorter* than random-matchup games at the median and enormously longer in the
+tail. Eight deals produced a truncation and **five of them truncated in both
+rotations** (deals 10, 16, 25, 27 and 44 at seed 42), so the runaway is a
+property of the position rather than of a seating or a coin flip — which makes
+those deals a ready-made regression fixture for a replacement agent.
+
+The likely mechanism, stated as a hypothesis because it has not been isolated:
+the retention table makes both agents hoard exactly the cards that end piles.
+Tens score 23, jokers 22, twos 21 and nines 20, above every ordinary rank, so
+both agents spend them last — and a ten is the burn. Two mirror hoarders keep
+feeding each other always-playable cheap cards while neither clears the pile, and
+once the deck is exhausted the pickups recirculate the same cards. Against
+random, the random agent plays its tens whenever chance says so, piles clear, and
+games end. If that is right it is the same defect as "burning is not valued at
+all" below, and this is direct evidence for it rather than an argument.
+
+One note on that run's diagnostics: 128 fallbacks appeared across 208506
+decisions (0.06%). A fallback means no candidate arrived before the deadline and
+the runner played a seeded legal move instead — the documented behaviour, but it
+does mean about 128 moves in that run were effectively random. The random matchup
+had none; the mirror's far longer games and larger hands make a decision
+occasionally overrun a 0.5 s budget that includes worker startup.
 
 ## Why greedy wins only ~80% against random
 
@@ -137,7 +190,11 @@ Ordered by expected gain per unit of work, and each one is testable on its own:
 2. **Value the burn explicitly.** Treat a ten, or a four-card batch, as worth
    playing when the pile is large or the constraint is hostile — a burn clears
    the pile, clears the constraint, and grants the same actor another decision
-   with a fresh budget, which is the strongest tempo swing in the profile.
+   with a fresh budget, which is the strongest tempo swing in the profile. The
+   mirror truncations are the evidence: two agents that both hoard their tens can
+   fail to finish a game at all. Treat **"the mirror match terminates" as an
+   acceptance test**, not just a win rate — deals 10, 16, 25, 27 and 44 at seed 42
+   run away in both rotations today.
 3. **Read the pile.** `view.discard_pile` and `view.constraint` are right there.
    Avoiding one pickup is worth more than shedding two cards.
 4. **Keep a legal answer in reserve.** Retention should depend on the constraint
