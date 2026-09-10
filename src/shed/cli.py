@@ -60,6 +60,7 @@ from shed.engine import (
     Rank,
     Unrestricted,
 )
+from shed.gauntlet import GauntletReport, MatchRecord, Rate, SelectionStats
 from shed.match import FinalPosition, MatchMetadata, MatchResult, MatchStatus, TurnRecord
 from shed.replay import Replay
 
@@ -69,10 +70,13 @@ __all__ = [
     "Visibility",
     "console_style",
     "build_lineup",
+    "build_participants",
     "card_text",
     "describe_constraint",
     "describe_event",
     "describe_position",
+    "gauntlet_progress",
+    "gauntlet_summary",
     "match_summary",
     "narrate",
     "positive_count",
@@ -451,12 +455,40 @@ def describe_position(
     return lines
 
 
+def build_participants(kinds: Sequence[str]) -> tuple[AgentSpec, ...]:
+    """Build one participant per requested agent kind.
+
+    Labels are derived from the position in the lineup, so a lineup may repeat a
+    kind -- two greedy agents become ``greedy-0`` and ``greedy-1`` -- and every
+    participant still has a distinct name in results. Distinct labels matter
+    most in a gauntlet, where participants change seats between matches and the
+    label is the only thing that follows one of them around.
+
+    Args:
+        kinds: Agent kinds in lineup order.
+
+    Returns:
+        The participants, in the same order.
+
+    Raises:
+        ValueError: If the table size is outside the profile's range or a kind
+            is not one the factory builds.
+    """
+    if not DEFAULT_RULES.min_players <= len(kinds) <= DEFAULT_RULES.max_players:
+        raise ValueError(
+            f"{DEFAULT_RULES.id} supports {DEFAULT_RULES.min_players}-"
+            f"{DEFAULT_RULES.max_players} players, got {len(kinds)}"
+        )
+    return tuple(
+        AgentSpec(kind=kind, name=f"{kind}-{position}") for position, kind in enumerate(kinds)
+    )
+
+
 def build_lineup(kinds: Sequence[str]) -> dict[PlayerId, AgentSpec]:
     """Seat one participant per requested agent kind.
 
-    Labels are derived from the seat, so a lineup may repeat a kind -- two
-    greedy agents become ``greedy-0`` and ``greedy-1`` -- and every participant
-    still has a distinct name in results.
+    For a single match a participant's position in the lineup is its seat, so
+    this is :func:`build_participants` keyed by seat.
 
     Args:
         kinds: Agent kinds in seat order, seat ``0`` first.
@@ -468,15 +500,7 @@ def build_lineup(kinds: Sequence[str]) -> dict[PlayerId, AgentSpec]:
         ValueError: If the table size is outside the profile's range or a kind
             is not one the factory builds.
     """
-    if not DEFAULT_RULES.min_players <= len(kinds) <= DEFAULT_RULES.max_players:
-        raise ValueError(
-            f"{DEFAULT_RULES.id} supports {DEFAULT_RULES.min_players}-"
-            f"{DEFAULT_RULES.max_players} players, got {len(kinds)}"
-        )
-    return {
-        PlayerId(seat): AgentSpec(kind=kind, name=f"{kind}-{seat}")
-        for seat, kind in enumerate(kinds)
-    }
+    return {PlayerId(seat): spec for seat, spec in enumerate(build_participants(kinds))}
 
 
 def restore_default_sigpipe() -> None:
@@ -684,3 +708,234 @@ def replay_summary(replay: Replay) -> list[str]:
         )
     )
     return lines
+
+
+def _rate_text(rate: Rate, *, places: int = 3) -> str:
+    """Render a count with the denominator it was measured against.
+
+    The denominator is never dropped and an empty one is never rendered as a
+    zero rate: ``0/0`` says a participant has no finished matches, which is a
+    different statement from losing every one of them.
+
+    Args:
+        rate: The measurement.
+        places: Decimal places for the ratio.
+
+    Returns:
+        The count over the denominator and the ratio, such as ``4/6 (0.667)``,
+        or ``0/0 (n/a)`` when nothing was measured.
+    """
+    value = rate.value
+    ratio = "n/a" if value is None else f"{value:.{places}f}"
+    return f"{rate.count}/{rate.total} ({ratio})"
+
+
+def _seconds_text(seconds: float | None) -> str:
+    """Render a duration in milliseconds, or a placeholder for an empty sample.
+
+    Args:
+        seconds: The duration, or ``None`` when there was nothing to measure.
+
+    Returns:
+        The duration in milliseconds, such as ``312 ms``, or ``n/a``.
+    """
+    return "n/a" if seconds is None else f"{seconds * 1000:.0f} ms"
+
+
+def _statistic_text(value: float | None) -> str:
+    """Render one statistic of a sample, or a placeholder for an empty one.
+
+    Args:
+        value: The statistic, or ``None`` when there was nothing to measure.
+
+    Returns:
+        The value to one decimal place, or ``n/a``.
+    """
+    return "n/a" if value is None else f"{value:.1f}"
+
+
+def _table(headers: Sequence[str], rows: Sequence[Sequence[str]]) -> list[str]:
+    """Lay out a compact console table.
+
+    The first column is a label and stays left-aligned; every other column holds
+    a number or a rate and is right-aligned, so magnitudes line up down the
+    column.
+
+    Args:
+        headers: Column headers.
+        rows: One sequence of cells per row, each the same length as the
+            headers.
+
+    Returns:
+        The header line followed by one line per row, without a separator rule:
+        the table is small and a rule would cost more than it explains.
+    """
+    widths = [
+        max(len(headers[column]), *(len(row[column]) for row in rows))
+        if rows
+        else len(headers[column])
+        for column in range(len(headers))
+    ]
+
+    def line(cells: Sequence[str]) -> str:
+        """Pad one row of cells to the shared column widths.
+
+        Args:
+            cells: The row's cells.
+
+        Returns:
+            The rendered line, without trailing spaces.
+        """
+        rendered = [cells[0].ljust(widths[0])]
+        rendered.extend(cell.rjust(widths[column]) for column, cell in enumerate(cells[1:], 1))
+        return "  ".join(rendered).rstrip()
+
+    return [line(headers), *(line(row) for row in rows)]
+
+
+def _results_table(report: GauntletReport) -> list[str]:
+    """Build the per-participant results table.
+
+    Args:
+        report: The aggregate to render.
+
+    Returns:
+        The table lines: wins over the finished matches a participant played,
+        then the same over the finished matches it played in each seat. Every
+        cell carries its denominator. Participants stay in lineup order, so two
+        runs can be read side by side.
+    """
+    seats = len(report.participants)
+    headers = ["agent", "kind", "wins", *(f"seat {seat}" for seat in range(seats))]
+    rows = [
+        [
+            agent.spec.name,
+            agent.spec.kind,
+            _rate_text(agent.wins),
+            *(_rate_text(rate) for rate in agent.by_seat),
+        ]
+        for agent in report.agents
+    ]
+    return _table(headers, rows)
+
+
+def _diagnostics_row(label: str, stats: SelectionStats) -> list[str]:
+    """Build one row of the decision-diagnostics table.
+
+    Counts are bare because the row's own decision count is the denominator for
+    all three of them, and it is the column immediately to their left.
+
+    Args:
+        label: What the row describes: a participant, or the whole run.
+        stats: The diagnostics for that set of decisions.
+
+    Returns:
+        The row's cells.
+    """
+    return [
+        label,
+        str(stats.decisions),
+        str(stats.fallbacks.count),
+        str(stats.rejections.count),
+        str(stats.crashes.count),
+        _seconds_text(stats.selection_seconds.mean),
+        _seconds_text(stats.selection_seconds.median),
+    ]
+
+
+def _diagnostics_table(report: GauntletReport) -> list[str]:
+    """Build the decision-diagnostics table, one row per participant plus a total.
+
+    Args:
+        report: The aggregate to render.
+
+    Returns:
+        The table lines. The trailing ``all`` row is the whole run, so the
+        per-participant rows can be checked against it at a glance.
+    """
+    headers = ["agent", "decisions", "fallbacks", "rejected", "crashes", "mean", "median"]
+    rows = [_diagnostics_row(agent.spec.name, agent.selection) for agent in report.agents]
+    rows.append(_diagnostics_row("all", report.selection))
+    return _table(headers, rows)
+
+
+def gauntlet_summary(report: GauntletReport) -> list[str]:
+    """Summarize a whole gauntlet run for the console.
+
+    The layout is deliberately flat: a header, the status accounting, the
+    results table, the head-to-head rows, the decision diagnostics, and finally
+    every match that did not finish. Nothing is hidden -- a truncated or aborted
+    match appears in the status line and again by name at the bottom, and is
+    never folded into somebody's losses -- and no win rate is printed without the
+    denominator it came from.
+
+    Args:
+        report: The aggregate to render.
+
+    Returns:
+        The summary lines, without a trailing newline.
+    """
+    config = report.config
+    status = report.status
+    agents = len(report.participants)
+    decisions = report.play_decisions
+    lines = [
+        f"{DEFAULT_RULES.id} | {agents} agents | {config.deals} deals x {agents} rotations = "
+        f"{status.scheduled} matches | seed {config.seed} | dealer {config.dealer} | "
+        f"{config.seconds_per_turn:g}s per decision",
+        f"status: {status.finished} finished | {status.truncated} truncated | "
+        f"{status.agent_failed} agent failed | {status.engine_failed} engine failed "
+        f"(of {status.scheduled} scheduled)",
+        "",
+        "wins among finished matches:",
+        *_results_table(report),
+        "",
+    ]
+    lines.extend(
+        f"{agent.spec.name} against {opponents}: {_rate_text(rate)}"
+        for agent in report.agents
+        for opponents, rate in agent.by_opponents
+    )
+    lines.extend(
+        [
+            "",
+            "decisions:",
+            *_diagnostics_table(report),
+            "",
+            f"play decisions per match: mean {_statistic_text(decisions.mean)} | "
+            f"median {_statistic_text(decisions.median)}",
+        ]
+    )
+    if report.failures:
+        lines.append("")
+        lines.append(f"matches that did not finish ({len(report.failures)}):")
+        lines.extend(
+            f"  match {failure.index} (deal {failure.deal_index}, rotation {failure.rotation}): "
+            f"{failure.status.value} - {failure.detail or 'no detail recorded'}"
+            for failure in report.failures
+        )
+    return lines
+
+
+def gauntlet_progress(record: MatchRecord, total: int, participants: Sequence[AgentSpec]) -> str:
+    """Describe one completed match while a long run is still going.
+
+    Args:
+        record: The match that just finished.
+        total: How many matches the schedule holds.
+        participants: The lineup, in participant order.
+
+    Returns:
+        One line naming the match, who sat where, and how it ended.
+    """
+    scheduled = record.scheduled
+    seating = ", ".join(
+        f"seat {seat}: {participants[index].name}" for seat, index in enumerate(scheduled.seats)
+    )
+    winner = record.winner
+    ending = record.result.status.value if winner is None else f"{participants[winner].name} wins"
+    return (
+        f"match {scheduled.index + 1}/{total} (deal {scheduled.deal_index}, "
+        f"rotation {scheduled.rotation}) | {seating} | {ending} | "
+        f"{record.result.play_decisions} play decisions"
+    )

@@ -11,9 +11,10 @@ transitions with snapshot undo -- the agent layer on top of it, and the timed
 match runner in :mod:`shed.match`, which owns clocks, worker processes, the
 selection policy, and the records a match leaves behind. On top of those,
 :mod:`shed.replay` writes and verifies versioned JSON replays and is the
-project's only serialization boundary, and :mod:`shed.cli` holds what the
-command-line scripts share. The gauntlet described in ``docs/implementation.md``
-is not implemented yet.
+project's only match-serialization boundary, :mod:`shed.gauntlet` schedules and
+aggregates sequential evaluations on top of the runner, and :mod:`shed.cli`
+holds what the command-line scripts share. The engine-only benchmark described
+in ``docs/implementation.md`` is not implemented yet.
 
 Importing this package is deliberately cheap. ``__version__`` is resolved on
 first access rather than at import time, because reading distribution metadata
