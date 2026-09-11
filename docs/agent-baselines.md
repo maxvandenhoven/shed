@@ -253,7 +253,14 @@ Two consequences for anyone running the next comparison:
   `implementation.md` §6 explicitly permits it for the first release; this is the
   first measurement of where it stops being cheap. A fix means a persistent worker
   per seat fed history deltas, or bounding what the view carries — both are design
-  changes, and both need the benchmark of §16 first.
+  changes, and both should start from the engine benchmark of §16, which now
+  exists as `scripts/benchmark.py`. Note what it measures and what it does not:
+  it times `observe()`, which stores an already-filtered history tuple by
+  reference, so the cost this section is about — building that tuple per decision
+  and shipping it through a pipe — is the runner's and is deliberately outside the
+  engine numbers. It does tell you the floor those numbers sit on: an apply/undo
+  pair costs about a millisecond, so a decision spending tens of milliseconds on
+  transport is not paying for the engine.
 
 ## How to measure a change cheaply
 

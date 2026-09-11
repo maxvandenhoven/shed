@@ -1,20 +1,20 @@
 """Shed: an engine, agents, and gauntlet for the hidden-information card game Shed.
 
-The package is being built in milestones. This module exports project metadata
-only; import the engine from :mod:`shed.engine` and the agents from
-:mod:`shed.agents`.
+This module exports project metadata only; import the engine from
+:mod:`shed.engine` and the agents from :mod:`shed.agents`.
 
-Implemented so far: the complete deterministic engine -- the canonical deck,
-dealing, authoritative state, immutable player views, the event vocabulary with
-private-event filtering, legal-move generation, and atomic setup and play
-transitions with snapshot undo -- the agent layer on top of it, and the timed
-match runner in :mod:`shed.match`, which owns clocks, worker processes, the
-selection policy, and the records a match leaves behind. On top of those,
+The first release is complete. It ships the deterministic engine -- the
+canonical deck, dealing, authoritative state, immutable player views, the event
+vocabulary with private-event filtering, legal-move generation, and atomic setup
+and play transitions with snapshot undo -- the agent layer on top of it, and the
+timed match runner in :mod:`shed.match`, which owns clocks, worker processes,
+the selection policy, and the records a match leaves behind. On top of those,
 :mod:`shed.replay` writes and verifies versioned JSON replays and is the
 project's only match-serialization boundary, :mod:`shed.gauntlet` schedules and
 aggregates sequential evaluations on top of the runner, and :mod:`shed.cli`
-holds what the command-line scripts share. The engine-only benchmark described
-in ``docs/implementation.md`` is not implemented yet.
+holds what the command-line scripts share. :mod:`shed.benchmark` stands apart
+from that stack: it measures the engine alone and deliberately imports neither
+the runner nor the agents, so no measurement can include worker startup.
 
 Importing this package is deliberately cheap. ``__version__`` is resolved on
 first access rather than at import time, because reading distribution metadata

@@ -9,7 +9,9 @@ actually score and where a stronger agent should start.
 
 ## Status
 
-The engine is being built in milestones. What exists today:
+The first release is complete: every requirement in
+[`docs/implementation.md`](docs/implementation.md) is implemented, and the review
+gates below pass on a clean checkout.
 
 | Area | State |
 | --- | --- |
@@ -26,13 +28,60 @@ The engine is being built in milestones. What exists today:
 | Timed match runner: selection policy, spawned workers, records | Implemented |
 | Versioned JSON replay, replay verification, `play` and `replay` commands | Implemented |
 | Sequential gauntlet: schedules, seed streams, accounting, `gauntlet` command | Implemented |
-| Engine benchmark and the `benchmark` command | Not started |
+| Engine benchmark and the `benchmark` command | Implemented |
 
 The engine works on strictly typed domain objects: constructors take a `Rank`,
 not an integer they convert into one, and check domain invariants only — `ty`
 enforces the annotations. Validating untyped external data and building these
-objects from it is the job of the future replay and transport layers, so the
-engine stays free of JSON and decoding.
+objects from it belongs to the layers where that data arrives, `shed.replay` and
+the runner's message handling, so the engine stays free of JSON and decoding.
+
+## The `shed-v1` rules profile
+
+One fixed, versioned profile, for 2–5 players. `RulesConfig` records it and
+refuses a changed field or an unknown identifier rather than quietly claiming a
+game was played under `shed-v1`. The full contract is section 3 of
+[`docs/implementation.md`](docs/implementation.md); these are the choices a
+player or an agent author needs:
+
+- **The deck** is 52 ordinary cards plus two distinct jokers: 54 uniquely
+  identified physical cards. Ranks run 2 to ace, ace high. **Suits decide
+  nothing** — not legality, not strength — which is why a play names a rank and a
+  count rather than a set of cards, and why the engine picks the physical cards
+  by ascending identifier.
+- **Setup.** Three cards go face down, three face up, and three to the hand.
+  Every player then privately picks which three of their six hand and face-up
+  cards end up face up; keeping the deal as dealt is legal. Submissions stay
+  private and are committed together, so nobody can react to a choice while
+  still making their own. The opener is then found by scanning ranks in the
+  order 3,4,5,6,7,8,9,10,J,Q,K,A,2,joker — specials last — and taking the first
+  rank anybody holds; ties among its holders break clockwise after the dealer.
+  The opening pile is unrestricted, so the opener need not lead that card.
+- **Zones, in order.** You play from your hand; when hand and deck are both
+  empty, from your face-up cards; and only then from your face-down slots, one
+  blind reveal at a time. A revealed card is tested against the constraint that
+  stood before the reveal: on a miss you take it and the pile, and a failed final
+  reveal does not win.
+- **A play** is one rank and a count from one zone, never a mix of hand and
+  table. The pile's constraint is what an ordinary rank must satisfy: nothing on
+  an empty pile, at least *r* after an ordinary *r*, at most seven after a seven.
+- **The exceptions.** A two is always legal and resets the requirement to "at
+  least two". A nine is always legal and leaves the constraint exactly as it
+  was — 7 then 9 still requires at most seven. A joker is always legal and clears
+  the constraint. A ten is always legal and burns the pile. Four of a rank played
+  **in one action** burns the pile, but only if that rank was legal to begin
+  with; four accumulating across separate turns does not burn.
+- **Blocked** means pickup, and pickup is never voluntary: when no batch is
+  playable, taking the pile is the only legal move.
+- **After a play** the hand refills to three while the deck lasts; drawing is
+  automatic and never a decision. A burn gives the same player another decision
+  with a fresh budget; anything else passes to the next seat.
+- **Winning** is checked after the refill: the first player with no cards
+  anywhere wins and the game ends. A final burn wins rather than earning an extra
+  turn. There are no eliminations, no last-player-loses rule, no passing, and no
+  off-turn responses.
+
+## The engine
 
 `GameState.apply_move()` is atomic. It validates the move against the position
 as it is now, snapshots the state, and resolves the whole chain — transfer or
@@ -72,6 +121,8 @@ state.undo_move(transition)  # back to the position before the decision
 state.is_finished, state.outcome  # False, None until somebody sheds everything
 ```
 
+## Agents
+
 An agent sees one observation and a turn-scoped submission channel, and
 nothing else. It reads its options from `view.legal_moves` — the engine is the
 only legality authority — and closes the decision with a final submission:
@@ -97,6 +148,37 @@ the legal rank/count actions uniformly. `GreedyAgent` keeps the cards that are
 hardest to shed — sevens, nines, twos, jokers, and tens score above every
 ordinary rank — sheds the largest batch it can, spends the cheapest cards among
 equally sized plays, and settles genuine ties with its seeded generator.
+
+### What an agent may see, and what it may keep
+
+A `PlayerView` is the whole of an agent's input. It carries the public rules
+profile, the public position — seats, dealer, phase, actor, ply, the discard
+pile in order, the burned cards, the constraint, the outcome once there is one,
+and every seat's face-up cards, hand *count*, and face-down slot identifiers —
+plus the viewer's own hand, the
+viewer's filtered history, and, for the acting seat only, that decision's legal
+moves. Every collection in it is a tuple of frozen values, and none of them
+aliases anything inside `GameState`.
+
+It never contains another seat's hand, any face-down identity, the deck order,
+the draw pile's contents, the shuffle seed, any RNG state, another player's
+pending setup submission, or the replay being recorded. History preserves what
+was once visible — a card seen face up before the arrangements is still in the
+record after it moves — and a private event reaches everyone but its recipient
+as a count with `cards=None`. Swapping two face-down cards between seats cannot
+change what any viewer observes or what moves they are offered; the engine tests
+assert exactly that.
+
+**There is no agent memory between decisions.** A worker is created for one
+decision, builds the agent, and exits; nothing an agent stores on `self`
+survives, and nothing it writes reaches the parent. That is deliberate — it is
+what keeps a fresh seed per decision from being undone by a reused generator —
+and the filtered history in each view is how an agent reconstructs what it knew.
+Persistent search state would need one persistent worker per seat and an
+explicit recovery story, which is future work rather than a thing that happens
+to work today.
+
+## Timed matches
 
 `MatchRunner` puts a clock around that. Each decision gets one freshly spawned
 worker, one fresh pipe, and one fresh agent seed; the actor's `legal_moves` are
@@ -150,6 +232,8 @@ cutting worker startup from about 120 ms to about 14 ms, because the server has
 parent assigns after import is visible to a plain `fork` child and invisible to a
 real worker.
 
+## Replays
+
 A finished match is written as versioned JSON, and read back through the only
 serialization boundary the project has. `shed.replay` holds every encoder and
 decoder; the engine, the agents, and the runner never see JSON, and nothing they
@@ -187,10 +271,23 @@ problems, not as an exception. Truncated and aborted matches replay too: a
 selection that was chosen but never applied stays out of the applied stream, so
 a replay can never play a move the match did not.
 
+What a replay reproduces is the *recording*, and only that. Rerunning the same
+match from the same seeds is not expected to produce the same game: the agents
+think against a wall clock, so how many improvements a decision finishes depends
+on the machine's scheduling and on how long a spawn took, and a different
+candidate can be the latest one when the deadline arrives. The recorded-move
+replay is deterministic regardless, which is the property the format is for.
+Timings are recorded as diagnostics and are never compared during verification.
+For a test that needs bit-for-bit repeatability of the *decisions* as well, drive
+the baselines synchronously with a fake turn context, which removes the clock
+from the loop entirely.
+
 A complete replay file holds hidden information — every face-down identity, the
 deck order, and each private draw — and is a trusted post-match artifact. The
 console output is the opposite: `describe_event` reports private events by their
 public count, so summarizing a replay never dumps what the players could not see.
+
+## The gauntlet
 
 `shed.gauntlet` compares agents by playing many of those matches. It schedules,
 seeds, and counts; every authoritative state still lives inside a `MatchRunner`,
@@ -242,9 +339,30 @@ rather than as a zero win rate.
 ## Install
 
 ```bash
+git clone https://github.com/maxvandenhoven/shed
+cd shed
 uv sync            # create .venv and install the project with dev tools
 uv sync --locked   # CI: install exactly the committed lockfile
 ```
+
+`uv sync` creates `.venv`, installs the pinned Python 3.12 toolchain, and
+installs `shed` in editable mode with `pytest`, `ruff`, and `ty`. There are no
+runtime dependencies — the package needs only the standard library — so
+installing the built wheel on its own is enough to use the library:
+
+```bash
+uv build                                  # dist/shed-0.1.0-py3-none-any.whl
+uv run --isolated --no-project --python 3.12 \
+    --with dist/shed-0.1.0-py3-none-any.whl \
+    python -c "from shed.engine import GameState; print(GameState.create(2, seed=1).phase)"
+```
+
+`--python 3.12` is not optional there: the wheel declares `requires-python
+>=3.12`, and outside the project directory `uv` would otherwise resolve against
+whatever interpreter it finds first.
+
+Every command below is written for a checkout, because the scripts under
+`scripts/` are part of the repository rather than console entry points.
 
 ## Development
 
@@ -257,7 +375,7 @@ uv build                    # build the sdist and wheel
 ```
 
 The review gates are the same commands with `ruff format --check .` in place of
-`ruff format .` and without `--fix`.
+`ruff format .` and without `--fix`; see [Contributing](#contributing).
 
 ## Layout
 
@@ -269,10 +387,12 @@ The review gates are the same commands with `ruff format --check .` in place of
 | `src/shed/match.py` | Timed decisions: selection policy, worker, pipe context, runner |
 | `src/shed/gauntlet.py` | Sequential evaluation: schedules, seeds, accounting, report file |
 | `src/shed/replay.py` | Versioned JSON replay: the whole codec, and verification |
+| `src/shed/benchmark.py` | Engine-only benchmark: fixtures, measurements, report |
 | `src/shed/cli.py` | Shared command-line logic: lineups, narration, summaries |
 | `tests/` | pytest suite |
-| `scripts/` | Command-line entry points: `play.py`, `replay.py`, `gauntlet.py` |
+| `scripts/` | Command-line entry points: `play.py`, `replay.py`, `gauntlet.py`, `benchmark.py` |
 | `docs/implementation.md` | Implementation specification |
+| `docs/agent-baselines.md` | What the shipped baselines score, and why |
 | `results/` | Generated local outputs, ignored by Git |
 
 ## Commands
@@ -340,7 +460,7 @@ exactly as stored, because position decides what happens next in both. Sorting
 is presentation only: the engine's orders are untouched and a replay still
 compares them exactly, so a wrong one cannot hide behind a tidy console.
 
-### Comparing agents
+### Running a gauntlet
 
 ```bash
 uv run scripts/gauntlet.py --agents random greedy --deals 10 --seed 42 --seconds-per-turn 0.5 --output results/gauntlet.json
@@ -401,12 +521,131 @@ That costs size — roughly 180 KB per match — so `--no-replays` drops the emb
 documents when only the aggregate is wanted. What is left keeps each match's
 schedule entry, seeds, status, and winner, but can no longer be replayed.
 
-One command from the specification belongs to a later milestone and does not
-exist yet:
+### Measuring the engine
 
 ```bash
 uv run scripts/benchmark.py --iterations 10000
+uv run scripts/benchmark.py --transitions 500 --playouts 50 --output results/benchmark.json
 ```
+
+The benchmark measures the engine and nothing else. `shed.benchmark` does not
+import `shed.match` — a test asserts that by reading its imports — so no worker
+startup, no transport, and no timed wait can end up inside a reported number.
+Four costs are reported separately, because they are charged separately:
+
+| Measurement | One operation | Why it is on its own |
+| --- | --- | --- |
+| legal moves | `state.get_legal_moves()` | No view is built, so this is grouping and rank comparison alone |
+| transitions | `state.apply_move()` then `state.undo_move()` | The pair a search spends; both ends copy the whole position |
+| observations | `state.observe()` | **Includes** generating the acting seat's legal moves |
+| playouts | one complete random game, and one decision of one | Engine-only throughput: deal, legality, apply |
+
+The observation rows are printed under the legality rows deliberately.
+`observe()` fills `PlayerView.legal_moves` for the acting seat on every call, so
+an observation is a legal-move generation plus a snapshot of the public
+position, and the two tables together show how much of it is which. History is
+passed in already filtered and stored by reference, so its length does not drive
+that cost; filtering it is the runner's work, not the engine's.
+
+Fixtures are discovered, not hand-written: seeded games are played and the first
+position of each shape is copied out — the opening arrangement, the first play, a
+hand grown past the refill target by a pickup, a forced pickup, a burn, the
+face-up collection, and a blind reveal. The same `--seed` finds the same
+positions, and their sizes are printed before any duration, because a timing
+without the position it was measured on says nothing.
+
+```
+$ uv run scripts/benchmark.py --iterations 2000 --transitions 100 --playouts 10
+shed-v1 engine benchmark | CPython 3.12.3 on Linux 6.18.44-fc-v24 (x86_64) | shed 0.1.0
+seed 0 | 3 players | 3 repeats | per repeat: 2,000 calls, 100 apply/undo pairs, 10 playouts
+
+fixtures:
+fixture     phase  hand  face up  face down  draw  discard  moves  history
+setup       setup     3        3          3    27        0     20        4
+opening      play     3        3          3    27        0      3        7
+grown-hand   play    12        3          3    16        2      4       30
+pickup       play     3        3          3    18        9      1       25
+burn         play     3        3          3     9        4      3       51
+face-up      play     0        3          3     0       10      3       87
+face-down    play     0        0          3     0        2      3      106
+
+legal moves (get_legal_moves; no view is built):
+fixture     calls  per call  calls/s  spread
+setup       2,000  25.57 us   39,114    1.23
+opening     2,000   6.28 us  159,316    1.01
+grown-hand  2,000   9.89 us  101,150    1.03
+…
+
+transitions (apply_move then undo_move, timed as one pair):
+fixture     pairs   per pair  pairs/s  spread
+setup         100  997.25 us    1,003    1.01
+opening       100  963.00 us    1,038    1.03
+…
+
+engine-only playouts (deal, legal moves, apply; no view, agent, or worker):
+subject          operations  per operation  operations/s  spread
+random game              10       87.57 ms            11    1.07
+random decision       1,619        0.54 ms         1,849    1.07
+
+1,619 decisions over 10 random 3-player games, 0 truncated at 10,000 decisions.
+```
+
+`--iterations` sizes the per-call measurements, `--transitions` the apply/undo
+pairs, `--playouts` the complete games, and `--repeats` how many times each runs;
+`--players` and `--seed` choose the games. `--output` writes the same report as
+JSON, with the raw per-repeat totals alongside the derived figures.
+
+Every printed duration is the *fastest* repeat, which is the one least
+contaminated by scheduling noise, and the `spread` column is the slowest divided
+by the fastest, so a busy machine is visible rather than averaged away. These
+numbers describe one machine and one interpreter. Nothing here is a threshold:
+no test asserts a duration, and none of it is a measured comparison with any
+other engine — including Hive, which this project takes its structure from but
+has never been benchmarked against.
+
+What that run shows is worth knowing before optimizing anything: **snapshot undo
+dominates**, by about two orders of magnitude. Generating legal moves costs 2–26
+µs depending on the position, building an observation 11–35 µs, and an apply/undo
+pair about 1 ms — almost all of it the two deep copies that make undo work, since
+a bare apply during a playout costs about half of it. The specification predicted
+exactly that ("full-state snapshot undo … may dominate otherwise cheap
+operations. Benchmark before replacing them"), and it is where a future search
+should look first. Those figures are from one machine; run it on yours.
+
+## Contributing
+
+Run the same gates review runs, from a clean checkout:
+
+```bash
+uv sync --locked            # install exactly the committed lockfile
+uv run ruff format --check .
+uv run ruff check .
+uv run ty check
+uv run pytest
+uv build
+```
+
+`uv.lock` is generated. Change dependencies with `uv add` / `uv remove` and let
+uv rewrite it; never edit it by hand.
+
+Every module, class, function, method, property, private helper, script, and test
+carries a Google-style docstring, and Ruff's `D` rules with
+`convention = "google"` are part of the lint gate. They check that a docstring is
+present and well formed, not that it says anything; the presence of one is the
+floor, and describing contracts, units, side effects, and information boundaries
+is the actual requirement. Do not blanket-disable the checks, and do not silence
+a type error or a missing implementation with `noqa` or an ignore comment.
+
+The suite takes about a minute: most of it is the process tests, which start
+real workers and wait on real deadlines rather than faking either. The selection
+policy is also tested against a fake clock and a fake transport, so a change to
+it can be checked in milliseconds before the slow tests confirm it end to end.
+Nothing asserts a duration — not in the runner tests and not in the benchmark
+tests — because a timing threshold fails on a loaded machine and says nothing
+about the code.
+
+Everything the commands write goes to `results/`, which Git ignores. Delete it
+whenever; nothing reads it back except the commands you point at a file.
 
 ## License
 
