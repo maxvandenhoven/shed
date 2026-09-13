@@ -15,7 +15,12 @@ import pytest
 
 from shed.agents import AgentSpec, ResearchAgent, build_agent
 from shed.agents.greedy import RETENTION_SCORE
-from shed.agents.research import RETENTION, _block_chance, _unseen_ranks
+from shed.agents.research import (
+    RETENTION,
+    _block_chance,
+    _race_multiplier,
+    _unseen_ranks,
+)
 from shed.engine import (
     Arrange,
     AtLeast,
@@ -428,6 +433,71 @@ def test_it_stays_frugal_when_no_play_applies_pressure(picker: DeckPicker) -> No
     chosen = _decide(_actor_view(state))
 
     assert chosen == Play(Zone.HAND, Rank.THREE, 1)
+
+
+def test_the_race_multiplier_follows_the_card_difference(picker: DeckPicker) -> None:
+    """Falling behind raises the price this agent will pay for pressure.
+
+    The multiplier is read directly, because it is the only thing that differs
+    between a seat with nine cards against one and a seat with one against nine.
+    """
+    behind = build_play_state(
+        picker,
+        hands={
+            FIRST_SEAT: [*picker.take(Rank.FIVE, 3), *picker.take(Rank.SIX, 3)],
+            SECOND_SEAT: picker.take(Rank.KING),
+        },
+        draw_count=0,
+    )
+    spare = DeckPicker()
+    ahead = build_play_state(
+        spare,
+        hands={
+            FIRST_SEAT: spare.take(Rank.KING),
+            SECOND_SEAT: [*spare.take(Rank.FIVE, 3), *spare.take(Rank.SIX, 3)],
+        },
+        draw_count=0,
+    )
+    level = DeckPicker()
+    even = build_play_state(
+        level,
+        hands={FIRST_SEAT: level.take(Rank.KING), SECOND_SEAT: level.take(Rank.FIVE)},
+        draw_count=0,
+    )
+
+    assert _race_multiplier(_actor_view(behind)) > 1.0
+    assert _race_multiplier(_actor_view(ahead)) < 1.0
+    assert _race_multiplier(_actor_view(even)) == pytest.approx(1.0)
+
+
+def test_being_far_behind_buys_a_block_a_cheap_play_would_not() -> None:
+    """The same pile and the same hand decide differently by race position.
+
+    Both positions offer a three and an ace against an opponent whose only cards
+    are public kings, with a nine-card pile. A king answers everything here
+    except the ace, so the ace is the one play that certainly blocks. Level on
+    cards the cheap three is right; six cards behind, the block is worth the
+    eleven extra retention points the ace costs.
+    """
+
+    def position(filler: int) -> GameState:
+        cards = DeckPicker()
+        hand = cards.many([Rank.THREE, Rank.ACE])
+        theirs = cards.take(Rank.KING, 2)
+        padding = [
+            *cards.take(Rank.FIVE, min(filler, 3)),
+            *cards.take(Rank.SIX, max(filler - 3, 0)),
+        ]
+        return build_play_state(
+            cards,
+            hands={FIRST_SEAT: [*hand, *padding], SECOND_SEAT: []},
+            face_up={SECOND_SEAT: theirs},
+            discard=cards.any_cards(9),
+            draw_count=0,
+        )
+
+    assert _decide(_actor_view(position(0))) == Play(Zone.HAND, Rank.THREE, 1)
+    assert _decide(_actor_view(position(6))) == Play(Zone.HAND, Rank.ACE, 1)
 
 
 def test_the_same_seed_decides_the_same_way(picker: DeckPicker) -> None:
