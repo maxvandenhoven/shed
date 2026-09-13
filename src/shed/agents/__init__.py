@@ -14,14 +14,17 @@ import every built-in agent at module scope.
 
 Two baselines ship: :class:`RandomAgent` samples uniformly among the legal
 actions, and :class:`GreedyAgent` sheds as much as it can as cheaply as it can.
-Both cover every decision the engine can ask for -- arrangement, hand, face-up,
-blind reveal, and forced pickup.
+:class:`ResearchAgent` is the experimental strategy, developed by measuring
+candidate heuristics head to head against the greedy baseline. All three cover
+every decision the engine can ask for -- arrangement, hand, face-up, blind
+reveal, and forced pickup.
 """
 
 from shed.agents.base import Agent, TurnContext
 from shed.agents.factory import AGENT_KINDS, AgentSpec, build_agent
 from shed.agents.greedy import RETENTION_SCORE, GreedyAgent
 from shed.agents.random import RandomAgent
+from shed.agents.research import ResearchAgent
 
 __all__ = [
     "AGENT_KINDS",
@@ -30,6 +33,7 @@ __all__ = [
     "AgentSpec",
     "GreedyAgent",
     "RandomAgent",
+    "ResearchAgent",
     "TurnContext",
     "build_agent",
 ]

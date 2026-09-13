@@ -1,0 +1,294 @@
+"""Tests for the research agent.
+
+The agent is developed by experiment, so these tests pin the things that must
+hold whatever the heuristic becomes -- it decides only from ``view.legal_moves``,
+it closes every decision the engine can ask for with exactly one legal final
+submission, and it is reproducible from its seed -- alongside the choices the
+current version makes in crafted positions. A strategy change is expected to
+rewrite the second group and to leave the first untouched.
+"""
+
+from dataclasses import replace
+
+import pytest
+
+from shed.agents import AgentSpec, ResearchAgent, build_agent
+from shed.engine import (
+    Arrange,
+    AtLeast,
+    GameState,
+    Move,
+    Phase,
+    PickUp,
+    Play,
+    PlayerId,
+    PlayerView,
+    Rank,
+    Reveal,
+    SlotId,
+    Zone,
+)
+from tests.agents.conftest import FakeTurn, play_baseline_match
+from tests.conftest import DeckPicker, build_play_state, build_setup_state
+
+FIRST_SEAT: PlayerId = PlayerId(0)
+"""Seat zero, the actor in every crafted position here."""
+
+SECOND_SEAT: PlayerId = PlayerId(1)
+"""The opponent in the crafted two-player positions here."""
+
+
+def _agent(seed: int = 7) -> ResearchAgent:
+    """Build a research agent through the factory.
+
+    Going through the factory rather than the constructor keeps the tests on the
+    path a match actually uses, so a missing registration fails here too.
+
+    Args:
+        seed: Seed for the agent's generator.
+
+    Returns:
+        A freshly built research agent.
+    """
+    built = build_agent(AgentSpec(kind="research", name="research-0"), seed=seed)
+    assert isinstance(built, ResearchAgent)
+    return built
+
+
+def _decide(view: PlayerView, *, seed: int = 7) -> Move:
+    """Run one decision and return the move the agent finalized.
+
+    Args:
+        view: The observation to decide on.
+        seed: Seed for the agent's generator.
+
+    Returns:
+        The single move the agent submitted.
+
+    Raises:
+        AssertionError: If the agent did not close the turn with exactly one
+            final submission.
+    """
+    turn = FakeTurn()
+    _agent(seed).think(view, turn)
+    assert [submission.final for submission in turn.submissions] == [True]
+    assert turn.selected in view.legal_moves
+    return turn.selected
+
+
+def _actor_view(state: GameState) -> PlayerView:
+    """Observe a state as its current actor.
+
+    Args:
+        state: A live state.
+
+    Returns:
+        The actor's view, carrying their legal moves.
+    """
+    actor = state.current_player
+    assert actor is not None
+    return state.observe(actor)
+
+
+def test_the_factory_builds_the_research_kind() -> None:
+    """The kind is registered, so a lineup can name it."""
+    assert "research" in AgentSpec(kind="research", name="research-0").kind
+    assert isinstance(_agent(), ResearchAgent)
+
+
+def test_it_refuses_a_view_with_no_choices(picker: DeckPicker) -> None:
+    """Observing as a non-actor yields no moves, and the agent invents none."""
+    state = build_play_state(
+        picker,
+        hands={FIRST_SEAT: picker.take(Rank.FIVE), SECOND_SEAT: picker.take(Rank.KING)},
+    )
+    waiting = state.observe(SECOND_SEAT)
+    assert waiting.legal_moves == ()
+
+    with pytest.raises(ValueError, match="no legal moves"):
+        _agent().think(waiting, FakeTurn())
+
+
+def test_it_decides_only_from_the_view(picker: DeckPicker) -> None:
+    """A narrowed legal-move tuple narrows the agent.
+
+    The view is cut down to one option the engine would not have offered alone,
+    so an agent that recomputed legality from the cards it can see would ignore
+    the narrowing.
+    """
+    state = build_play_state(
+        picker,
+        hands={
+            FIRST_SEAT: [*picker.take(Rank.FIVE, 2), *picker.take(Rank.NINE, 2)],
+            SECOND_SEAT: picker.take(Rank.KING),
+        },
+    )
+    view = _actor_view(state)
+    assert len(view.legal_moves) > 1
+    only = view.legal_moves[-1]
+
+    assert _decide(replace(view, legal_moves=(only,))) == only
+
+
+def test_setup_keeps_the_hardest_cards_face_up(picker: DeckPicker) -> None:
+    """Arrangement is a choice among the six visible cards, and it is scored.
+
+    The dealt split is deliberately wrong -- the cheap cards start face up --
+    so keeping the deal would be a different move from the one scoring picks.
+    """
+    state = build_setup_state(
+        picker,
+        hands={
+            FIRST_SEAT: picker.many([Rank.TEN, Rank.TWO, Rank.JOKER]),
+            SECOND_SEAT: picker.any_cards(3),
+        },
+        face_up={
+            FIRST_SEAT: picker.many([Rank.THREE, Rank.FOUR, Rank.FIVE]),
+            SECOND_SEAT: picker.any_cards(3),
+        },
+    )
+    # Seat 1 arranges first when seat 0 deals; keep its deal to reach seat 0.
+    first = _actor_view(state)
+    assert first.viewer == SECOND_SEAT
+    state.apply_move(_decide(first))
+
+    view = _actor_view(state)
+    assert view.phase is Phase.SETUP
+    chosen = _decide(view)
+
+    assert isinstance(chosen, Arrange)
+    kept = {card.rank for card in view.hand if card.id in chosen.face_up_cards}
+    assert kept == {Rank.TEN, Rank.TWO, Rank.JOKER}
+
+
+def test_it_plays_from_the_hand_while_the_hand_has_cards(picker: DeckPicker) -> None:
+    """The engine picks the active zone, and the agent never names another."""
+    state = build_play_state(
+        picker,
+        hands={FIRST_SEAT: picker.take(Rank.FIVE, 2), SECOND_SEAT: picker.take(Rank.KING)},
+        face_up={FIRST_SEAT: picker.take(Rank.ACE, 3)},
+    )
+
+    chosen = _decide(_actor_view(state))
+
+    assert isinstance(chosen, Play)
+    assert chosen.source is Zone.HAND
+
+
+def test_it_plays_the_face_up_zone_when_hand_and_deck_are_empty(picker: DeckPicker) -> None:
+    """Face-up play is an ordinary scored decision, not a special case."""
+    state = build_play_state(
+        picker,
+        hands={FIRST_SEAT: [], SECOND_SEAT: picker.take(Rank.KING)},
+        face_up={FIRST_SEAT: picker.many([Rank.FOUR, Rank.QUEEN, Rank.TEN])},
+        draw_count=0,
+    )
+
+    chosen = _decide(_actor_view(state))
+
+    assert isinstance(chosen, Play)
+    assert chosen.source is Zone.FACE_UP
+
+
+def test_it_reveals_a_face_down_slot_when_that_is_all_that_is_left(picker: DeckPicker) -> None:
+    """Blind reveals are indistinguishable, so any offered slot is acceptable."""
+    hidden = {SlotId(0): picker.one(Rank.ACE), SlotId(2): picker.one(Rank.THREE)}
+    state = build_play_state(
+        picker,
+        hands={FIRST_SEAT: [], SECOND_SEAT: picker.take(Rank.KING)},
+        face_down={FIRST_SEAT: hidden},
+        draw_count=0,
+    )
+    view = _actor_view(state)
+    assert view.hand == ()
+
+    chosen = _decide(view)
+
+    assert isinstance(chosen, Reveal)
+    assert chosen.slot in hidden
+
+
+def test_it_takes_the_forced_pickup_when_nothing_is_playable(picker: DeckPicker) -> None:
+    """Pickup is never chosen for its merits; it is the only move on offer."""
+    state = build_play_state(
+        picker,
+        hands={FIRST_SEAT: picker.take(Rank.THREE), SECOND_SEAT: picker.take(Rank.KING)},
+        constraint=AtLeast(Rank.KING),
+    )
+    view = _actor_view(state)
+    assert view.legal_moves == (PickUp(),)
+
+    assert _decide(view) == PickUp()
+
+
+def test_it_sheds_the_largest_batch_of_the_cheapest_rank(picker: DeckPicker) -> None:
+    """The current heuristic dumps size first and spends cheap cards first."""
+    state = build_play_state(
+        picker,
+        hands={
+            FIRST_SEAT: [*picker.take(Rank.FOUR, 2), *picker.take(Rank.KING, 2)],
+            SECOND_SEAT: picker.take(Rank.KING),
+        },
+    )
+
+    chosen = _decide(_actor_view(state))
+
+    assert chosen == Play(Zone.HAND, Rank.FOUR, 2)
+
+
+def test_it_keeps_its_specials_when_an_ordinary_rank_answers(picker: DeckPicker) -> None:
+    """A ten is worth more held than spent on a pile an eight already answers."""
+    state = build_play_state(
+        picker,
+        hands={
+            FIRST_SEAT: picker.many([Rank.EIGHT, Rank.TEN]),
+            SECOND_SEAT: picker.take(Rank.KING),
+        },
+        constraint=AtLeast(Rank.SIX),
+    )
+
+    chosen = _decide(_actor_view(state))
+
+    assert chosen == Play(Zone.HAND, Rank.EIGHT, 1)
+
+
+def test_the_same_seed_decides_the_same_way(picker: DeckPicker) -> None:
+    """Tie-breaking is seeded, so a decision is reproducible from the seed."""
+    state = build_play_state(
+        picker,
+        hands={
+            FIRST_SEAT: picker.many([Rank.THREE, Rank.FOUR, Rank.FIVE]),
+            SECOND_SEAT: picker.take(Rank.KING),
+        },
+    )
+    view = _actor_view(state)
+
+    assert _decide(view, seed=99) == _decide(view, seed=99)
+
+
+def test_it_plays_complete_matches_against_greedy() -> None:
+    """Every decision of a full match is legal, and the games terminate.
+
+    This is the end-to-end check that the agent covers every decision shape the
+    engine can ask for: arrangements, hand and face-up batches, blind reveals,
+    and forced pickups all occur across a handful of complete games.
+    """
+    specs = (
+        AgentSpec(kind="research", name="research-0"),
+        AgentSpec(kind="greedy", name="greedy-1"),
+    )
+    shapes: set[type] = set()
+
+    for deal_seed in range(6):
+        log = play_baseline_match(specs, deal_seed=deal_seed, action_limit=2_000)
+
+        assert not log.truncated, f"deal {deal_seed} did not finish within the bound"
+        assert log.outcome is not None
+        for decision in log.decisions:
+            assert decision.move in decision.view.legal_moves
+            assert [submission.final for submission in decision.submissions] == [True]
+            if decision.player == FIRST_SEAT:
+                shapes.add(type(decision.move))
+
+    assert Arrange in shapes
+    assert Play in shapes

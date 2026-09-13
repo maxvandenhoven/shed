@@ -16,10 +16,11 @@ from dataclasses import dataclass
 from shed.agents.base import Agent
 from shed.agents.greedy import GreedyAgent
 from shed.agents.random import RandomAgent
+from shed.agents.research import ResearchAgent
 
 __all__ = ["AGENT_KINDS", "AgentSpec", "build_agent"]
 
-AGENT_KINDS: tuple[str, ...] = ("greedy", "random")
+AGENT_KINDS: tuple[str, ...] = ("greedy", "random", "research")
 """Kinds :func:`build_agent` can build, sorted for stable error messages."""
 
 
@@ -87,5 +88,7 @@ def build_agent(spec: AgentSpec, *, seed: int) -> Agent:
             return GreedyAgent(seed=seed)
         case "random":
             return RandomAgent(seed=seed)
+        case "research":
+            return ResearchAgent(seed=seed)
         case _:
             raise ValueError(f"No builder for agent kind {spec.kind!r}")
