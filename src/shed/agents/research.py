@@ -5,12 +5,19 @@ head against :class:`~shed.agents.greedy.GreedyAgent` over a fixed bank of deals
 and only a version that scores better replaces the one before it, so the file
 always holds the best measured heuristic rather than the most recent idea.
 
-The first version deliberately reproduces the greedy baseline exactly, which
-makes the benchmark's starting point a known quantity: any later difference in
-score is attributable to a change made here and to nothing else. It scores every
-candidate with the same two numbers greedy uses -- the retention table for
-arrangements, and ``(-count, retention)`` for plays -- and settles ties with the
-seeded generator over the engine's deterministically ordered move tuple.
+Arrangements are still scored with greedy's retention table. Plays are not:
+greedy sorts them by ``(-count, retention)``, so batch size decides first and the
+agent dumps three kings when one would do. This agent sorts them by
+``(retention, -count)`` instead -- it picks the *cheapest rank* it can spend and
+then spends every copy of it -- and settles ties with the seeded generator over
+the engine's deterministically ordered move tuple.
+
+The retention table is what makes that ordering sensible rather than merely
+frugal. A high ordinary rank answers more constraints than a low one, since
+``AtLeast(r)`` accepts everything from ``r`` up, and the four always-playable
+ranks answer every constraint there is. Spending the cheapest rank therefore
+keeps the most flexible cards in hand, which is what stops a turn from ending in
+a forced pickup.
 
 The agent decides in one pass and submits once, as final. That is not a
 concession to the clock: the heuristic costs microseconds, so there is nothing to
@@ -47,10 +54,12 @@ def _score(move: Move, view: PlayerView, ranks: Mapping[CardId, Rank]) -> tuple[
     """Score one candidate move; smaller sorts better.
 
     Arrangements sort by the negated retention sum of the cards they leave face
-    up, so the largest sum wins. Plays sort by negated batch size first and then
-    by the retention score of the rank spent. Blind reveals and a forced pickup
-    offer nothing to compare: every reveal hides the same unknown, and a pickup
-    is the only action when it appears at all.
+    up, so the largest sum wins. Plays sort by the retention score of the rank
+    spent first -- spend what is least useful to keep -- and then by negated
+    batch size, so the whole of the chosen rank goes at once rather than one card
+    at a time. Blind reveals and a forced pickup offer nothing to compare: every
+    reveal hides the same unknown, and a pickup is the only action when it
+    appears at all.
 
     Args:
         move: A candidate from the engine's legal-move tuple.
@@ -72,7 +81,7 @@ def _score(move: Move, view: PlayerView, ranks: Mapping[CardId, Rank]) -> tuple[
         case Arrange(face_up_cards=card_ids):
             return (-sum(RETENTION_SCORE[ranks[card_id]] for card_id in card_ids),)
         case Play(rank=rank, count=count):
-            return (-count, RETENTION_SCORE[rank])
+            return (RETENTION_SCORE[rank], -count)
         case Reveal() | PickUp():
             return ()
     raise ValueError(f"Unknown move {move!r}")
