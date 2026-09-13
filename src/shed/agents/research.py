@@ -278,9 +278,12 @@ def _block_chance(view: PlayerView, unseen: Counter[Rank], constraint: PlayConst
     settles the question exactly, and a seat with nothing but face-down slots
     turns over one unknown card, which is the same draw with one card.
 
-    The pool is slightly pessimistic on purpose -- it includes the viewer's own
-    face-down cards, which the opponent cannot hold -- because correcting for
-    three cards out of twenty or more would not change which move wins.
+    The pool deliberately includes the viewer's own face-down cards. That is not
+    an approximation: nothing distinguishes one unseen card from another here, so
+    every hand-sized subset of the pool is equally likely and the draw is the
+    correct marginal. What the estimate does ignore is inference from *behaviour*
+    -- which cards a seat has picked up, and what its choices imply about the
+    rest -- and tracking the pickups was measured and did not pay for itself.
 
     Args:
         view: The viewer's observation.
