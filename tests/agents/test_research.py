@@ -8,13 +8,14 @@ current version makes in crafted positions. A strategy change is expected to
 rewrite the second group and to leave the first untouched.
 """
 
+from collections import Counter
 from dataclasses import replace
 
 import pytest
 
 from shed.agents import AgentSpec, ResearchAgent, build_agent
 from shed.agents.greedy import RETENTION_SCORE
-from shed.agents.research import RETENTION
+from shed.agents.research import RETENTION, _block_chance, _unseen_ranks
 from shed.engine import (
     Arrange,
     AtLeast,
@@ -309,6 +310,124 @@ def test_it_keeps_its_specials_when_an_ordinary_rank_answers(picker: DeckPicker)
     chosen = _decide(_actor_view(state))
 
     assert chosen == Play(Zone.HAND, Rank.EIGHT, 1)
+
+
+def test_the_unseen_pool_is_the_deck_minus_what_this_seat_has_been_shown(
+    picker: DeckPicker,
+) -> None:
+    """The block estimate's pool is derived, and it is derived correctly.
+
+    The pool must be exactly the cards sitting where this seat cannot see them:
+    the draw pile, every face-down slot -- its own included -- and the other
+    seats' hands. It is checked against the authoritative state, which the agent
+    never receives.
+    """
+    state = build_play_state(
+        picker,
+        hands={
+            FIRST_SEAT: picker.take(Rank.FIVE, 2),
+            SECOND_SEAT: picker.take(Rank.KING, 2),
+        },
+        face_up={FIRST_SEAT: picker.take(Rank.ACE, 3)},
+        face_down={FIRST_SEAT: {SlotId(0): picker.one(Rank.THREE)}},
+        discard=picker.take(Rank.FOUR, 1),
+        draw_count=9,
+    )
+    view = _actor_view(state)
+
+    unseen = _unseen_ranks(view)
+
+    hidden: Counter[Rank] = Counter(card.rank for card in state.draw_pile)
+    for seat in state.seat_order:
+        player = state.players[seat]
+        hidden.update(card.rank for card in player.face_down.values())
+        if seat != FIRST_SEAT:
+            hidden.update(card.rank for card in player.hand)
+    assert unseen == hidden
+    assert sum(unseen.values()) == view.draw_count + 1 + 2
+
+
+def test_a_public_face_up_zone_makes_the_block_estimate_exact(picker: DeckPicker) -> None:
+    """An opponent playing off the table is read, not guessed.
+
+    With an empty hand the next seat must play its face-up cards, which everyone
+    can see, so the estimate is a certainty in both directions.
+    """
+    state = build_play_state(
+        picker,
+        hands={FIRST_SEAT: picker.take(Rank.SIX), SECOND_SEAT: []},
+        face_up={SECOND_SEAT: picker.take(Rank.FOUR, 2)},
+        draw_count=0,
+    )
+    view = _actor_view(state)
+    unseen = _unseen_ranks(view)
+
+    assert _block_chance(view, unseen, AtLeast(Rank.KING)) == 1.0
+    assert _block_chance(view, unseen, AtLeast(Rank.THREE)) == 0.0
+
+
+def test_it_spends_a_dearer_card_to_bury_an_opponent_who_cannot_answer(
+    picker: DeckPicker,
+) -> None:
+    """Pressure outscores frugality when the pile makes a block expensive.
+
+    The opponent's only cards are public fours, so an ace blocks them and a three
+    does not. A three is the cheaper card by eleven retention points, and the
+    twelve-card pile a block would hand over is worth more than that.
+    """
+    hand = picker.many([Rank.THREE, Rank.ACE])
+    theirs = picker.take(Rank.FOUR, 2)
+    state = build_play_state(
+        picker,
+        hands={FIRST_SEAT: hand, SECOND_SEAT: []},
+        face_up={SECOND_SEAT: theirs},
+        discard=picker.any_cards(12),
+        draw_count=0,
+    )
+
+    chosen = _decide(_actor_view(state))
+
+    assert chosen == Play(Zone.HAND, Rank.ACE, 1)
+
+
+def test_a_pile_too_small_to_matter_leaves_the_cheap_play_standing(
+    picker: DeckPicker,
+) -> None:
+    """The same position with a small pile is decided by retention alone."""
+    hand = picker.many([Rank.THREE, Rank.ACE])
+    theirs = picker.take(Rank.FOUR, 2)
+    state = build_play_state(
+        picker,
+        hands={FIRST_SEAT: hand, SECOND_SEAT: []},
+        face_up={SECOND_SEAT: theirs},
+        discard=picker.any_cards(2),
+        draw_count=0,
+    )
+
+    chosen = _decide(_actor_view(state))
+
+    assert chosen == Play(Zone.HAND, Rank.THREE, 1)
+
+
+def test_it_stays_frugal_when_no_play_applies_pressure(picker: DeckPicker) -> None:
+    """With nothing to gain, the cheapest rank still wins.
+
+    The opponent's public twos answer every constraint there is, so each
+    candidate earns a zero block bonus and the retention table decides alone.
+    """
+    hand = picker.many([Rank.THREE, Rank.ACE])
+    theirs = picker.take(Rank.TWO, 2)
+    state = build_play_state(
+        picker,
+        hands={FIRST_SEAT: hand, SECOND_SEAT: []},
+        face_up={SECOND_SEAT: theirs},
+        discard=picker.any_cards(12),
+        draw_count=0,
+    )
+
+    chosen = _decide(_actor_view(state))
+
+    assert chosen == Play(Zone.HAND, Rank.THREE, 1)
 
 
 def test_the_same_seed_decides_the_same_way(picker: DeckPicker) -> None:
