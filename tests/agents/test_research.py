@@ -13,6 +13,8 @@ from dataclasses import replace
 import pytest
 
 from shed.agents import AgentSpec, ResearchAgent, build_agent
+from shed.agents.greedy import RETENTION_SCORE
+from shed.agents.research import RETENTION
 from shed.engine import (
     Arrange,
     AtLeast,
@@ -255,6 +257,42 @@ def test_it_spends_every_copy_of_the_rank_it_settles_on(picker: DeckPicker) -> N
     chosen = _decide(_actor_view(state))
 
     assert chosen == Play(Zone.HAND, Rank.FOUR, 2)
+
+
+def test_the_table_differs_from_greedy_only_in_the_seven() -> None:
+    """The retention table is this agent's own, and its one edit is deliberate.
+
+    Pinning the difference keeps an accidental divergence from the baseline
+    visible: a later experiment that retunes the table is expected to rewrite
+    this test along with the entry it changes.
+    """
+    differences = {
+        rank: (RETENTION_SCORE[rank], RETENTION[rank])
+        for rank in RETENTION
+        if RETENTION_SCORE[rank] != RETENTION[rank]
+    }
+
+    assert differences == {Rank.SEVEN: (17, 10)}
+    assert set(RETENTION) == set(RETENTION_SCORE)
+
+
+def test_it_spends_a_seven_before_a_jack(picker: DeckPicker) -> None:
+    """The cheaper seven is a behaviour change, not just a number.
+
+    Greedy scores a seven 17 and a jack 11, so it would spend the jack; this
+    agent scores the seven 10 and spends it.
+    """
+    state = build_play_state(
+        picker,
+        hands={
+            FIRST_SEAT: picker.many([Rank.SEVEN, Rank.JACK]),
+            SECOND_SEAT: picker.take(Rank.ACE),
+        },
+    )
+
+    chosen = _decide(_actor_view(state))
+
+    assert chosen == Play(Zone.HAND, Rank.SEVEN, 1)
 
 
 def test_it_keeps_its_specials_when_an_ordinary_rank_answers(picker: DeckPicker) -> None:

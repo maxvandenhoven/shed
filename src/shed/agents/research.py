@@ -5,9 +5,10 @@ head against :class:`~shed.agents.greedy.GreedyAgent` over a fixed bank of deals
 and only a version that scores better replaces the one before it, so the file
 always holds the best measured heuristic rather than the most recent idea.
 
-Arrangements are still scored with greedy's retention table. Plays are not:
-greedy sorts them by ``(-count, retention)``, so batch size decides first and the
-agent dumps three kings when one would do. This agent sorts them by
+Scoring is retention-driven, as greedy's is, but the table is this agent's own
+and the play ordering is not greedy's. Greedy sorts plays by
+``(-count, retention)``, so batch size decides first and the agent dumps three
+kings when one would do. This agent sorts them by
 ``(retention, -count)`` instead -- it picks the *cheapest rank* it can spend and
 then spends every copy of it -- and settles ties with the seeded generator over
 the engine's deterministically ordered move tuple.
@@ -28,10 +29,39 @@ shared agent tests require of every strategy in the factory.
 from collections.abc import Mapping
 
 from shed.agents.base import Agent, TurnContext
-from shed.agents.greedy import RETENTION_SCORE
 from shed.engine import Arrange, CardId, Move, PickUp, Play, PlayerView, Rank, Reveal
 
-__all__ = ["ResearchAgent"]
+__all__ = ["RETENTION", "ResearchAgent"]
+
+RETENTION: Mapping[Rank, int] = {
+    Rank.THREE: 3,
+    Rank.FOUR: 4,
+    Rank.FIVE: 5,
+    Rank.SIX: 6,
+    Rank.SEVEN: 10,
+    Rank.EIGHT: 8,
+    Rank.NINE: 20,
+    Rank.TEN: 23,
+    Rank.JACK: 11,
+    Rank.QUEEN: 12,
+    Rank.KING: 13,
+    Rank.ACE: 14,
+    Rank.TWO: 21,
+    Rank.JOKER: 22,
+}
+"""How much this agent wants to keep a card of each rank; the only parameter.
+
+It starts from greedy's table -- ordinary ranks score their numeric value, and
+the ranks that play against any pile score above every ordinary one -- and
+differs in exactly one entry, which is a measured change rather than a taste.
+
+A **seven scores 10 rather than 17**, which drops it below the jack and makes it
+an early spend instead of a hoarded special. A seven is the weakest of the
+"special" ranks to hold: it is not always playable, it answers only the
+constraints a low card answers, and the ``AtMost(SEVEN)`` it leaves behind
+restricts *this* agent again on its next turn as much as it restricts anybody.
+Holding one is a liability the table now prices in.
+"""
 
 
 def _own_rank_by_id(view: PlayerView) -> dict[CardId, Rank]:
@@ -79,9 +109,9 @@ def _score(move: Move, view: PlayerView, ranks: Mapping[CardId, Rank]) -> tuple[
     del view
     match move:
         case Arrange(face_up_cards=card_ids):
-            return (-sum(RETENTION_SCORE[ranks[card_id]] for card_id in card_ids),)
+            return (-sum(RETENTION[ranks[card_id]] for card_id in card_ids),)
         case Play(rank=rank, count=count):
-            return (RETENTION_SCORE[rank], -count)
+            return (RETENTION[rank], -count)
         case Reveal() | PickUp():
             return ()
     raise ValueError(f"Unknown move {move!r}")
