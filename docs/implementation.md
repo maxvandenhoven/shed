@@ -157,6 +157,34 @@ Imports use `from shed.engine import ...`, never `from src...`. Scripts are thin
 
 **Final dependency direction.** Every import runs one way and there is no cycle, so nothing is broken by a function-local import: `engine.types` → `engine.events` → `engine.state`; `agents.base` → `agents.random`/`agents.greedy` → `agents.factory`; then `match` → `replay` → `gauntlet`, each depending on the layers before it, with `cli` last, above all of them. `benchmark` sits outside that stack and depends on the engine alone: it deliberately does not import `match`, so no measurement can include worker startup, and `cli` imports it only to render its report. The two function-local imports in shipped code are both deliberate and neither breaks a cycle: `shed/__init__.py` defers `importlib.metadata` so importing the package stays cheap in a per-decision worker, and `engine/events.py` imports `GameState` only under `TYPE_CHECKING`.
 
+**The phone companion is a later addition, outside this contract.** The first
+release is the table above. `src/shed/companion/` was added afterwards, for
+tracking a game played with physical cards, and the specification is
+[`docs/companion.md`](companion.md) rather than this document. Two of its
+decisions constrain the code here and are recorded for that reason. First, it
+imports the profile's individual rules from `shed.engine` -- `can_play_rank`,
+`constraint_after`, `burn_reason`, `legal_batches`, `active_zone_for_counts` --
+instead of restating them, which is why those five are public and take counts,
+ranks, and constraints rather than a `GameState`; a change to any of them is a
+change to both callers. Second, it never fabricates a hidden card to satisfy an
+engine signature: it builds a `PlayerView` from observed information alone,
+leaving unobserved cards out as counts, and calls an agent directly rather than
+through the timed runner. It depends on `engine` and `agents` and on nothing else
+in the package -- not `match`, not `replay`, not `cli` -- and on no third-party
+package at all.
+
+| Path | Responsibility |
+| --- | --- |
+| `src/shed/companion/__init__.py` | Public companion exports |
+| `src/shed/companion/observed.py` | Observed state, its events, and the reducer over engine rules |
+| `src/shed/companion/advice.py` | Observed state to `PlayerView`, and the greedy recommendation |
+| `src/shed/companion/codec.py` | JSON vocabulary and the decoding boundary |
+| `src/shed/companion/session.py` | Versioned session document, replay, and screen rendering |
+| `src/shed/companion/api.py` | Stateless JSON endpoints and the asset allowlist |
+| `src/shed/companion/server.py` | `python -m shed.companion`: bind, report, shut down |
+| `src/shed/companion/static/` | The bundled page, stylesheet, and script |
+| `tests/companion/` | Observed-state, adapter, session, and HTTP tests |
+
 **`engine/rules.py` is not part of this layout.** The earlier sketch put a `Ruleset` class and a `legal_moves(view)` function there. With the operations on `GameState`, which already carries its `RulesConfig`, that module would hold nothing: legality reads the state directly and lives beside the state it reads, and the rank predicate, constraint transition, and burn rule are small cohesive helpers in `state.py` rather than a second module importing it back. `cli.py` is the one cohesive helper module the layout gained instead, and it is presentation, not rules.
 
 ## 5. Supporting types

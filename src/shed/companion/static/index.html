@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>Shed companion</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2032%2032%22%3E%3Crect%20width%3D%2232%22%20height%3D%2232%22%20rx%3D%226%22%20fill%3D%22%231d4ed8%22%2F%3E%3Ctext%20x%3D%2216%22%20y%3D%2223%22%20font-family%3D%22system-ui%2Csans-serif%22%20font-size%3D%2218%22%20font-weight%3D%22700%22%20text-anchor%3D%22middle%22%20fill%3D%22%23fff%22%3ES%3C%2Ftext%3E%3C%2Fsvg%3E">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div id="offline" class="banner" hidden>
+  <strong>Cannot reach the companion.</strong>
+  <span id="offline-detail">Retrying…</span>
+  <p class="banner-note">Your game and anything you have typed are saved. Restart
+    <code>python -m shed.companion</code> in Termux and this will recover by itself.</p>
+</div>
+
+<!-- ========================= SETUP ========================= -->
+<main id="setup" hidden>
+  <h1>Shed companion</h1>
+  <p class="lede">Track a real two-player game and see what the greedy agent would play.</p>
+
+  <div class="tabs" role="tablist">
+    <button type="button" class="tab" data-panel="setup-new" role="tab" aria-selected="true">New game</button>
+    <button type="button" class="tab" data-panel="setup-join" role="tab" aria-selected="false">Join a game</button>
+    <button type="button" class="tab" data-panel="setup-import" role="tab" aria-selected="false">Restore</button>
+  </div>
+
+  <section id="setup-new" class="panel">
+    <h2>New game</h2>
+    <p class="hint">Enter the cards <em>after</em> you and your opponent have swapped
+      between hand and table. Face-down cards stay unknown.</p>
+    <label class="field">Your hand (3 cards)
+      <div class="picker" data-picker="new-my-hand" data-limit="3"></div>
+    </label>
+    <label class="field">Your face-up cards (3)
+      <div class="picker" data-picker="new-my-face-up" data-limit="3"></div>
+    </label>
+    <label class="field">Opponent's face-up cards (3)
+      <div class="picker" data-picker="new-opp-face-up" data-limit="3"></div>
+    </label>
+    <fieldset class="field">
+      <legend>Who played first?</legend>
+      <div class="choices">
+        <label><input type="radio" name="new-starter" value="me" checked> You</label>
+        <label><input type="radio" name="new-starter" value="opponent"> Opponent</label>
+      </div>
+    </fieldset>
+    <button type="button" class="primary big" id="start-new">Start tracking</button>
+    <p class="error" id="new-error" hidden></p>
+  </section>
+
+  <section id="setup-join" class="panel" hidden>
+    <h2>Join a game in progress</h2>
+    <p class="hint">Enter what you can see. Anything you cannot see stays unknown, and
+      the companion will say so rather than guess.</p>
+    <label class="field">Your hand
+      <div class="picker" data-picker="join-my-hand" data-limit="20"></div>
+    </label>
+    <label class="field">Your face-up cards
+      <div class="picker" data-picker="join-my-face-up" data-limit="3"></div>
+    </label>
+    <label class="field">Your face-down cards left
+      <input type="number" id="join-my-face-down" min="0" max="3" value="3" inputmode="numeric">
+    </label>
+    <label class="field">Opponent's face-up cards
+      <div class="picker" data-picker="join-opp-face-up" data-limit="3"></div>
+    </label>
+    <label class="field">Opponent's face-down cards left
+      <input type="number" id="join-opp-face-down" min="0" max="3" value="3" inputmode="numeric">
+    </label>
+    <label class="field">Cards in opponent's hand
+      <input type="number" id="join-opp-hand-count" min="0" value="3" inputmode="numeric">
+    </label>
+    <label class="field">Opponent's hand cards you know (optional)
+      <div class="picker" data-picker="join-opp-hand-known" data-limit="20"></div>
+    </label>
+    <label class="field">Cards left in the deck
+      <input type="number" id="join-deck-count" min="0" value="0" inputmode="numeric">
+      <label class="inline"><input type="checkbox" id="join-deck-unknown"> I have not counted it</label>
+      <span class="hint">Without this count the companion cannot work out refills, so
+        it will ask for it before advising.</span>
+    </label>
+    <label class="field">Pile, bottom to top (leave out cards you never saw)
+      <div class="picker" data-picker="join-pile" data-limit="54"></div>
+      <span class="hint">Unseen cards in the pile: <input type="number" id="join-pile-unknown" min="0" value="0" inputmode="numeric"></span>
+    </label>
+    <fieldset class="field">
+      <legend>Restriction in force</legend>
+      <div class="choices">
+        <label><input type="radio" name="join-constraint" value="unrestricted" checked> None</label>
+        <label><input type="radio" name="join-constraint" value="at_least"> At least</label>
+        <label><input type="radio" name="join-constraint" value="at_most"> At most 7</label>
+      </div>
+      <div class="picker single" data-picker="join-constraint-rank" data-limit="1"></div>
+    </fieldset>
+    <fieldset class="field">
+      <legend>Whose turn is it?</legend>
+      <div class="choices">
+        <label><input type="radio" name="join-to-act" value="me" checked> Yours</label>
+        <label><input type="radio" name="join-to-act" value="opponent"> Opponent's</label>
+      </div>
+    </fieldset>
+    <button type="button" class="primary big" id="start-join">Start tracking</button>
+    <p class="error" id="join-error" hidden></p>
+  </section>
+
+  <section id="setup-import" class="panel" hidden>
+    <h2>Restore from a backup</h2>
+    <p class="hint">Paste an exported session. If it is not readable, nothing changes.</p>
+    <textarea id="import-text" rows="8" spellcheck="false" placeholder='{"schema_version":1,…}'></textarea>
+    <button type="button" class="primary big" id="do-import">Restore this game</button>
+    <p class="error" id="import-error" hidden></p>
+  </section>
+</main>
+
+<!-- ========================= GAME ========================= -->
+<main id="game" hidden>
+  <header id="status-bar">
+    <div id="turn-chip" class="chip">—</div>
+    <div class="chip" id="restriction-chip">—</div>
+    <div class="chip" id="pile-chip">—</div>
+    <div class="chip" id="deck-chip">—</div>
+  </header>
+
+  <p class="error" id="action-error" hidden></p>
+  <p class="warn" id="replay-error" hidden></p>
+
+  <section id="pending" class="card accent" hidden>
+    <h2 id="pending-prompt">Cards to record</h2>
+    <p class="hint">These cards are already counted into your hand. Tap their ranks.</p>
+    <div class="picker" data-picker="pending" data-limit="10"></div>
+    <button type="button" class="primary big" id="pending-submit">Record these cards</button>
+  </section>
+
+  <section id="rec" class="card">
+    <h2>Greedy recommendation</h2>
+    <div id="rec-body" hidden>
+      <p class="headline" id="rec-headline">—</p>
+      <p id="rec-reasoning" class="reason"></p>
+      <p id="rec-effect" class="reason"></p>
+      <button type="button" class="primary big" id="rec-played">I played this</button>
+      <ul id="rec-notes" class="notes"></ul>
+      <p id="rec-caveat" class="caveat"></p>
+    </div>
+    <div id="rec-blocked" hidden>
+      <p class="hint">No recommendation yet:</p>
+      <ul id="rec-blockers" class="blockers"></ul>
+    </div>
+  </section>
+
+  <section id="mine" class="card">
+    <h2>My cards</h2>
+    <p id="mine-zone" class="hint"></p>
+    <div id="mine-options"></div>
+    <div id="mine-reveal" hidden>
+      <p class="hint">Turn over one face-down card, then tap the rank that came up.</p>
+      <div class="picker single" data-picker="my-reveal" data-limit="1"></div>
+      <button type="button" class="primary big" id="my-reveal-submit">Record this reveal</button>
+    </div>
+    <dl class="zones">
+      <dt>Hand</dt><dd id="mine-hand">—</dd>
+      <dt>Face up</dt><dd id="mine-face-up">—</dd>
+      <dt>Face down</dt><dd id="mine-face-down">—</dd>
+    </dl>
+  </section>
+
+  <section id="theirs" class="card">
+    <h2>Opponent action</h2>
+    <div id="opp-play">
+      <p class="hint">Tap the rank they played, then how many.</p>
+      <div class="picker single" data-picker="opp-rank" data-limit="1"></div>
+      <div id="opp-counts" class="options"></div>
+      <button type="button" class="primary big" id="opp-confirm" disabled>Confirm their play</button>
+    </div>
+    <div id="opp-reveal" hidden>
+      <p class="hint">They are down to face-down cards. Tap the rank they turned over.</p>
+      <div class="picker single" data-picker="opp-reveal" data-limit="1"></div>
+      <button type="button" class="primary big" id="opp-reveal-submit">Record their reveal</button>
+    </div>
+    <button type="button" class="danger big" id="opp-pickup">They picked up the pile</button>
+  </section>
+
+  <section id="table" class="card">
+    <h2>Table status</h2>
+    <table class="status">
+      <tbody id="status-rows"></tbody>
+    </table>
+    <ul id="uncertainty" class="notes"></ul>
+  </section>
+
+  <section id="recovery" class="card">
+    <h2>Recovery</h2>
+    <div class="row">
+      <button type="button" class="big" id="undo">Undo last entry</button>
+      <button type="button" class="big" id="toggle-correct">Correct state</button>
+    </div>
+
+    <div id="correct" class="subcard" hidden>
+      <p class="hint">A correction is recorded as its own entry, so it shows in the
+        history and Undo takes it back. Leave anything you are not changing blank.</p>
+      <label class="field">Your hand (replaces it)
+        <div class="picker" data-picker="fix-my-hand" data-limit="30"></div>
+        <label class="inline"><input type="checkbox" id="fix-my-hand-empty"> my hand is empty</label>
+      </label>
+      <label class="field">Your face-up cards (replaces them)
+        <div class="picker" data-picker="fix-my-face-up" data-limit="6"></div>
+        <label class="inline"><input type="checkbox" id="fix-my-face-up-empty"> mine are all gone</label>
+      </label>
+      <label class="field">Opponent's face-up cards (replaces them)
+        <div class="picker" data-picker="fix-opp-face-up" data-limit="6"></div>
+        <label class="inline"><input type="checkbox" id="fix-opp-face-up-empty"> theirs are all gone</label>
+      </label>
+      <div class="grid">
+        <label class="field">Your face-down left <input type="number" id="fix-my-face-down" min="0" inputmode="numeric"></label>
+        <label class="field">Their face-down left <input type="number" id="fix-opp-face-down" min="0" inputmode="numeric"></label>
+        <label class="field">Cards in their hand <input type="number" id="fix-opp-hand-count" min="0" inputmode="numeric"></label>
+        <label class="field">Deck left <input type="number" id="fix-deck-count" min="0" inputmode="numeric"></label>
+        <label class="field">Burned cards <input type="number" id="fix-burned-count" min="0" inputmode="numeric"></label>
+      </div>
+      <fieldset class="field">
+        <legend>Whose turn (optional)</legend>
+        <div class="choices">
+          <label><input type="radio" name="fix-to-act" value=""checked> Leave alone</label>
+          <label><input type="radio" name="fix-to-act" value="me"> Yours</label>
+          <label><input type="radio" name="fix-to-act" value="opponent"> Opponent's</label>
+        </div>
+      </fieldset>
+      <label class="field">Why (optional)
+        <input type="text" id="fix-note" placeholder="missed their 9">
+      </label>
+      <button type="button" class="primary big" id="fix-submit">Record this correction</button>
+    </div>
+
+    <h3>Action history</h3>
+    <ol id="history" class="history" reversed></ol>
+
+    <h3>Backup</h3>
+    <div class="row">
+      <button type="button" class="big" id="export">Show export</button>
+      <button type="button" class="big" id="restart">Start a different game</button>
+    </div>
+    <textarea id="export-text" rows="6" spellcheck="false" readonly hidden></textarea>
+  </section>
+
+  <footer>
+    <span id="rev">—</span> · greedy baseline advice only · nothing leaves this phone
+  </footer>
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>
