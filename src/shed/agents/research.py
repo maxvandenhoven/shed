@@ -5,7 +5,7 @@ head against :class:`~shed.agents.greedy.GreedyAgent` over a fixed bank of deals
 and only a version that scores better replaces the one before it, so the file
 always holds the best measured heuristic rather than the most recent idea.
 
-Four ideas are in it, in the order they were measured.
+Five ideas are in it, in the order they were measured.
 
 **Spend the cheapest rank, then every copy of it.** Greedy sorts plays by
 ``(-count, retention)``, so batch size decides first and it dumps three kings
@@ -29,6 +29,11 @@ spends, and the pile measures how much more.
 next seat means losing on the current trajectory, so a card spent to bury them is
 worth more than one kept; holding fewer means the cheap, safe play is already
 winning. The bonus is scaled accordingly.
+
+**Pay extra to block a seat that is about to win.** A pile measures what a block
+costs an opponent in cards, which is the wrong measure when the cards they still
+hold are one turn from ending the game. Against a seat down to its last couple of
+cards the block is worth a fixed premium on top.
 
 The agent decides in one pass and submits once, as final. That is not a
 concession to the clock: the heuristic costs microseconds, so there is nothing to
@@ -65,7 +70,14 @@ from shed.engine import (
     can_play_rank,
 )
 
-__all__ = ["BLOCK_WEIGHT", "RACE_WEIGHT", "RETENTION", "ResearchAgent"]
+__all__ = [
+    "BLOCK_WEIGHT",
+    "MATCH_POINT",
+    "MATCH_POINT_VALUE",
+    "RACE_WEIGHT",
+    "RETENTION",
+    "ResearchAgent",
+]
 
 RETENTION: Mapping[Rank, int] = {
     Rank.THREE: 3,
@@ -119,6 +131,21 @@ This weight scales the bonus by the normalized card difference, so at ``0.5`` th
 bonus runs from half again as valuable when hopelessly behind to half as valuable
 when hopelessly ahead. Reversing its sign costs about four points of win rate,
 which is what says the direction is real rather than fitted.
+"""
+
+MATCH_POINT = 2
+"""Cards left in a seat's every zone at which it counts as about to win."""
+
+MATCH_POINT_VALUE = 10.0
+"""Retention points a certain block is worth against a seat at match point.
+
+The ordinary bonus is proportional to the pile, because a pile is what a blocked
+opponent has to pick up and then shed again. That reasoning fails at the end: a
+seat two cards from winning is barely inconvenienced by a three-card pile in
+absolute terms, and enormously inconvenienced by having to take it at all. This
+premium is added on top of the pile term whenever the next seat holds
+:data:`MATCH_POINT` cards or fewer, and it is deliberately blunt -- the score is
+flat anywhere between roughly 6 and 15, so nothing here balances on the value.
 """
 
 _DECK_RANKS: Mapping[Rank, int] = Counter(card.rank for card in build_deck())
@@ -287,7 +314,8 @@ def _play_value(move: Play, view: PlayerView, unseen: Counter[Rank]) -> float:
     Against that stands what it does to the next seat: a play that leaves a
     constraint they probably cannot answer hands them the whole pile, which is
     worth :data:`BLOCK_WEIGHT` retention points per card they would take, scaled
-    by :func:`_race_multiplier` for how badly this seat needs the swing.
+    by :func:`_race_multiplier` for how badly this seat needs the swing, plus
+    :data:`MATCH_POINT_VALUE` when that seat is about to win.
 
     A burn earns no such bonus. It clears the pile rather than handing it over
     and leaves the opponent unrestricted, so its only merits -- removing cards
@@ -306,9 +334,13 @@ def _play_value(move: Play, view: PlayerView, unseen: Counter[Rank]) -> float:
     constraint = _constraint_after(move.rank, move.count, view.constraint)
     if constraint is None:
         return value
+    following = _following_seat(view)
+    chance = _block_chance(view, unseen, constraint)
     taken = len(view.discard_pile) + move.count
-    bonus = BLOCK_WEIGHT * _race_multiplier(view) * _block_chance(view, unseen, constraint)
-    return value - bonus * taken
+    worth = BLOCK_WEIGHT * _race_multiplier(view) * taken
+    if _remaining(following) <= MATCH_POINT:
+        worth += MATCH_POINT_VALUE
+    return value - chance * worth
 
 
 def _score(

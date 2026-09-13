@@ -378,10 +378,11 @@ def test_it_spends_a_dearer_card_to_bury_an_opponent_who_cannot_answer(
 
     The opponent's only cards are public fours, so an ace blocks them and a three
     does not. A three is the cheaper card by eleven retention points, and the
-    twelve-card pile a block would hand over is worth more than that.
+    twelve-card pile a block would hand over is worth more than that. They hold
+    three cards, clear of match point, so the pile term decides this alone.
     """
     hand = picker.many([Rank.THREE, Rank.ACE])
-    theirs = picker.take(Rank.FOUR, 2)
+    theirs = picker.take(Rank.FOUR, 3)
     state = build_play_state(
         picker,
         hands={FIRST_SEAT: hand, SECOND_SEAT: []},
@@ -400,7 +401,7 @@ def test_a_pile_too_small_to_matter_leaves_the_cheap_play_standing(
 ) -> None:
     """The same position with a small pile is decided by retention alone."""
     hand = picker.many([Rank.THREE, Rank.ACE])
-    theirs = picker.take(Rank.FOUR, 2)
+    theirs = picker.take(Rank.FOUR, 3)
     state = build_play_state(
         picker,
         hands={FIRST_SEAT: hand, SECOND_SEAT: []},
@@ -475,15 +476,16 @@ def test_being_far_behind_buys_a_block_a_cheap_play_would_not() -> None:
 
     Both positions offer a three and an ace against an opponent whose only cards
     are public kings, with a nine-card pile. A king answers everything here
-    except the ace, so the ace is the one play that certainly blocks. Level on
-    cards the cheap three is right; six cards behind, the block is worth the
-    eleven extra retention points the ace costs.
+    except the ace, so the ace is the one play that certainly blocks, and three
+    of them keeps that seat clear of match point. Level on cards the cheap three
+    is right; six cards behind, the block is worth the eleven extra retention
+    points the ace costs.
     """
 
     def position(filler: int) -> GameState:
         cards = DeckPicker()
         hand = cards.many([Rank.THREE, Rank.ACE])
-        theirs = cards.take(Rank.KING, 2)
+        theirs = cards.take(Rank.KING, 3)
         padding = [
             *cards.take(Rank.FIVE, min(filler, 3)),
             *cards.take(Rank.SIX, max(filler - 3, 0)),
@@ -498,6 +500,45 @@ def test_being_far_behind_buys_a_block_a_cheap_play_would_not() -> None:
 
     assert _decide(_actor_view(position(0))) == Play(Zone.HAND, Rank.THREE, 1)
     assert _decide(_actor_view(position(6))) == Play(Zone.HAND, Rank.ACE, 1)
+
+
+def test_a_seat_one_card_from_winning_is_worth_blocking_at_a_price(
+    picker: DeckPicker,
+) -> None:
+    """A small pile is the wrong measure of a block against a seat about to win.
+
+    The opponent holds one public king and nothing else, so a king answers and
+    an ace does not. The pile is two cards, far too small for the ordinary bonus
+    to buy an ace over a three; the match-point premium is what does.
+    """
+    hand = picker.many([Rank.THREE, Rank.ACE])
+    state = build_play_state(
+        picker,
+        hands={FIRST_SEAT: hand, SECOND_SEAT: []},
+        face_up={SECOND_SEAT: picker.take(Rank.KING)},
+        discard=picker.any_cards(2),
+        draw_count=0,
+    )
+    view = _actor_view(state)
+    assert sum(len(public.face_up) + public.hand_count for public in view.players[1:]) == 1
+
+    assert _decide(view) == Play(Zone.HAND, Rank.ACE, 1)
+
+
+def test_the_premium_does_not_apply_to_a_seat_with_cards_to_spare(
+    picker: DeckPicker,
+) -> None:
+    """The same shape with the opponent further from home keeps the cheap play."""
+    hand = picker.many([Rank.THREE, Rank.ACE])
+    state = build_play_state(
+        picker,
+        hands={FIRST_SEAT: hand, SECOND_SEAT: []},
+        face_up={SECOND_SEAT: picker.take(Rank.KING, 3)},
+        discard=picker.any_cards(2),
+        draw_count=0,
+    )
+
+    assert _decide(_actor_view(state)) == Play(Zone.HAND, Rank.THREE, 1)
 
 
 def test_the_same_seed_decides_the_same_way(picker: DeckPicker) -> None:
