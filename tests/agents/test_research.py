@@ -8,6 +8,7 @@ current version makes in crafted positions. A strategy change is expected to
 rewrite the second group and to leave the first untouched.
 """
 
+import random
 from collections import Counter
 from dataclasses import replace
 
@@ -16,9 +17,13 @@ import pytest
 from shed.agents import AgentSpec, ResearchAgent, build_agent
 from shed.agents.greedy import RETENTION_SCORE
 from shed.agents.research import (
+    ENDGAME_WIDTH,
     RETENTION,
     _block_chance,
+    _determinize,
     _race_multiplier,
+    _shortlist,
+    _static_choice,
     _unseen_ranks,
 )
 from shed.engine import (
@@ -35,6 +40,7 @@ from shed.engine import (
     Reveal,
     SlotId,
     Zone,
+    validate_decision_boundary,
 )
 from tests.agents.conftest import FakeTurn, play_baseline_match
 from tests.conftest import DeckPicker, build_play_state, build_setup_state
@@ -480,6 +486,10 @@ def test_being_far_behind_buys_a_block_a_cheap_play_would_not() -> None:
     of them keeps that seat clear of match point. Level on cards the cheap three
     is right; six cards behind, the block is worth the eleven extra retention
     points the ace costs.
+
+    This asks the static scorer rather than the agent. The position has an empty
+    draw pile, so the agent would search it, and what a rollout concludes is a
+    different claim from what the score prefers -- which is the claim under test.
     """
 
     def position(filler: int) -> GameState:
@@ -498,8 +508,11 @@ def test_being_far_behind_buys_a_block_a_cheap_play_would_not() -> None:
             draw_count=0,
         )
 
-    assert _decide(_actor_view(position(0))) == Play(Zone.HAND, Rank.THREE, 1)
-    assert _decide(_actor_view(position(6))) == Play(Zone.HAND, Rank.ACE, 1)
+    level = _static_choice(_actor_view(position(0)), random.Random(7))
+    behind = _static_choice(_actor_view(position(6)), random.Random(7))
+
+    assert level == Play(Zone.HAND, Rank.THREE, 1)
+    assert behind == Play(Zone.HAND, Rank.ACE, 1)
 
 
 def test_a_seat_one_card_from_winning_is_worth_blocking_at_a_price(
@@ -553,6 +566,115 @@ def test_the_same_seed_decides_the_same_way(picker: DeckPicker) -> None:
     view = _actor_view(state)
 
     assert _decide(view, seed=99) == _decide(view, seed=99)
+
+
+def test_a_sampled_world_is_one_this_observation_could_have_come_from(
+    picker: DeckPicker,
+) -> None:
+    """Determinization is checked against the engine, not just against itself.
+
+    A sample must pass the engine's own decision-boundary invariants and must
+    offer the viewer exactly the moves the real position offered; if it did not,
+    the search would be reasoning about a game that could not be this one. The
+    hidden zones must match the public counts, and the viewer's own hand must
+    come back untouched.
+    """
+    state = build_play_state(
+        picker,
+        hands={
+            FIRST_SEAT: [*picker.take(Rank.FIVE, 2), *picker.take(Rank.NINE, 1)],
+            SECOND_SEAT: picker.take(Rank.KING, 2),
+        },
+        face_up={FIRST_SEAT: picker.take(Rank.ACE, 2)},
+        face_down={FIRST_SEAT: {SlotId(0): picker.one(Rank.THREE)}},
+        discard=picker.take(Rank.FOUR, 1),
+        draw_count=7,
+    )
+    view = _actor_view(state)
+    rng = random.Random(3)
+
+    for _ in range(25):
+        world = _determinize(view, rng)
+
+        validate_decision_boundary(world)
+        assert set(world.get_legal_moves()) == set(view.legal_moves)
+        assert [card.id for card in world.players[FIRST_SEAT].hand] == [c.id for c in view.hand]
+        assert len(world.draw_pile) == view.draw_count
+        for public in view.players:
+            held = world.players[public.player]
+            assert len(held.hand) == public.hand_count
+            assert tuple(sorted(held.face_down)) == public.face_down_slots
+            assert [c.id for c in held.face_up] == [c.id for c in public.face_up]
+
+
+def test_the_search_runs_only_once_the_draw_pile_is_empty(picker: DeckPicker) -> None:
+    """A shortlist is only built where a rollout can reach the end of the game."""
+    agent = _agent()
+    state = build_play_state(
+        picker,
+        hands={
+            FIRST_SEAT: [*picker.take(Rank.FIVE, 2), *picker.take(Rank.KING, 2)],
+            SECOND_SEAT: picker.take(Rank.ACE, 2),
+        },
+        draw_count=8,
+    )
+    with_deck = _actor_view(state)
+
+    assert not agent._searchable(with_deck)
+    assert agent._searchable(replace(with_deck, draw_count=0))
+
+
+def test_a_search_failure_leaves_the_static_choice_standing(picker: DeckPicker) -> None:
+    """Search is an optimization; a fault in it must not cost the decision."""
+    state = build_play_state(
+        picker,
+        hands={
+            FIRST_SEAT: [*picker.take(Rank.FIVE, 2), *picker.take(Rank.KING, 2)],
+            SECOND_SEAT: picker.take(Rank.ACE, 2),
+        },
+        draw_count=0,
+    )
+    view = _actor_view(state)
+    agent = _agent()
+    expected = _static_choice(view, random.Random(7))
+
+    class Exploding:
+        """A turn whose clock raises, which the search must survive."""
+
+        def remaining_seconds(self) -> float:
+            raise RuntimeError("clock failed")
+
+        def submit(self, move: Move, *, final: bool = False) -> None:
+            raise AssertionError("the search must not submit")
+
+    assert agent._search(view, expected, Exploding()) == expected
+
+
+def test_the_shortlist_keeps_the_static_pick_and_stays_within_its_width(
+    picker: DeckPicker,
+) -> None:
+    """Whatever else it compares, the incumbent is always on the list."""
+    state = build_play_state(
+        picker,
+        hands={
+            FIRST_SEAT: [
+                *picker.take(Rank.THREE, 1),
+                *picker.take(Rank.SIX, 1),
+                *picker.take(Rank.JACK, 1),
+                *picker.take(Rank.KING, 1),
+            ],
+            SECOND_SEAT: picker.take(Rank.ACE, 2),
+        },
+        draw_count=0,
+    )
+    view = _actor_view(state)
+    fallback = _static_choice(view, random.Random(7))
+
+    short = _shortlist(view, fallback)
+
+    assert fallback in short
+    assert len(short) <= ENDGAME_WIDTH
+    assert all(move in view.legal_moves for move in short)
 
 
 def test_it_plays_whole_matches_against_greedy_and_they_mostly_terminate() -> None:
