@@ -206,21 +206,32 @@ samples -- keeps sampling noise from unseating a decision the heuristic got righ
 which is what separates this from the mid-game search that measured worse.
 """
 
-ENDGAME_TIME_FLOOR = 0.25
+ENDGAME_TIME_FLOOR = 0.5
 """Seconds left at which the search stops sampling and takes what it has.
 
 The sample count is the real bound -- a searched decision costs about 50 ms on
 average and 0.6 s at the 99th percentile -- and this is the backstop that keeps an
 unusually large endgame from running past its deadline, which would cost the
-whole match under strict accounting. It is checked before every sample, so a
-decision that starts with nothing left submits the static choice instead.
+whole match under strict accounting. It is checked before every sample *and*
+between candidates within one, so the longest a decision can overrun the check is
+a single rollout; a decision that starts with nothing left submits the static
+choice instead. Measured over 4575 decisions against a real countdown, the
+slowest searched decision took under a second of the 2.5 available.
 """
 
 _SEED_SPACE = 2**32
 """Range the rollout policies' per-decision seeds are drawn from."""
 
-_ROLLOUT_LIMIT = 400
-"""Decisions a single rollout may take before it is abandoned as unfinished."""
+_ROLLOUT_LIMIT = 120
+"""Decisions a single rollout may take before it is abandoned as unfinished.
+
+An endgame settles in roughly twenty decisions, so this is generous for the
+games that end and short for the ones that do not. The bound is what keeps the
+*worst* case affordable rather than the typical one: two agents can recirculate
+the same cards indefinitely, and at the old bound of 400 a single decision's
+samples could run past the whole turn budget. One did, in one decision out of
+15698, and it cost that match.
+"""
 
 _DECK_RANKS: Mapping[Rank, int] = Counter(card.rank for card in build_deck())
 """How many cards of each rank the canonical deck holds; the unseen baseline."""
@@ -691,6 +702,19 @@ def _static_choice(view: PlayerView, rng: random.Random) -> Move:
     return rng.choice(tied)
 
 
+def _leader(wins: list[float]) -> int:
+    """Return the index of the best-scoring candidate so far.
+
+    Args:
+        wins: Accumulated wins per shortlisted move.
+
+    Returns:
+        The leading index; ties go to the earliest, which is the candidate the
+        static score ranked highest.
+    """
+    return max(range(len(wins)), key=lambda index: wins[index])
+
+
 def _shortlist(view: PlayerView, fallback: Move) -> list[Play]:
     """Return the plays worth searching, best static score first.
 
@@ -785,6 +809,10 @@ class ResearchAgent(Agent):
                 world = _determinize(view, self._rng)
                 seed = self._rng.randrange(_SEED_SPACE)
                 for index, move in enumerate(short):
+                    if index and turn.remaining_seconds() < ENDGAME_TIME_FLOOR:
+                        # Abandon a half-finished sample rather than score the
+                        # candidates on different numbers of rollouts.
+                        return fallback if not taken else short[_leader(wins)]
                     trial = deepcopy(world)
                     trial.apply_move(move)
                     wins[index] += _rollout(trial, view.viewer, random.Random(seed))
