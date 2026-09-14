@@ -72,10 +72,13 @@ from shed.engine import (
     AtMost,
     Card,
     CardId,
+    CardRevealed,
+    CardsPlayed,
     GameState,
     Move,
     Phase,
     PickUp,
+    PilePickedUp,
     Play,
     PlayConstraint,
     PlayerId,
@@ -506,6 +509,38 @@ def _unseen_cards(view: PlayerView) -> list[Card]:
     return [card for card in build_deck() if card.id not in seen]
 
 
+def _known_cards(view: PlayerView) -> dict[PlayerId, set[CardId]]:
+    """Track the cards each seat is publicly known to still hold.
+
+    A pickup names every card it transfers, so those cards are known to be in
+    that seat's hand from then until it plays them; a play and a reveal both name
+    what left. Draws are private, so what this recovers is a *slice* of a hand
+    rather than the whole of it.
+
+    Nothing here is inference: every event read is one the filtered history shows
+    this viewer, carrying identities the engine made public.
+
+    Args:
+        view: The viewer's observation, carrying its filtered history.
+
+    Returns:
+        Known card identifiers per seat; seats with nothing known map to an
+        empty set.
+    """
+    held: dict[PlayerId, set[CardId]] = {seat: set() for seat in view.seat_order}
+    for event in view.history:
+        match event:
+            case PilePickedUp(player=player, cards=cards):
+                held[player].update(card.id for card in cards)
+            case CardsPlayed(player=player, cards=cards):
+                held[player].difference_update(card.id for card in cards)
+            case CardRevealed(player=player, card=card):
+                held[player].discard(card.id)
+            case _:
+                pass
+    return held
+
+
 def _determinize(view: PlayerView, rng: random.Random) -> GameState:
     """Sample one full position the observation could have come from.
 
@@ -514,6 +549,11 @@ def _determinize(view: PlayerView, rng: random.Random) -> GameState:
     public counts, and whatever is left to the draw pile. Nothing but the
     observation and the generator goes in, so a sampled world is a guess this
     seat is entitled to make.
+
+    The deal is not uniform, because the observation is not silent. Cards a
+    pickup put in a hand are placed back in that hand rather than shuffled among
+    the unknowns, so every sampled world agrees with what the history already
+    showed. Only the genuinely unknown remainder is dealt at random.
 
     Args:
         view: The viewer's observation.
@@ -527,7 +567,23 @@ def _determinize(view: PlayerView, rng: random.Random) -> GameState:
         StateInvariantError: If the sample is not a valid position, which would
             mean the observation and the deck disagree.
     """
-    pool = _unseen_cards(view)
+    unseen = _unseen_cards(view)
+    known = _known_cards(view)
+    # A slice larger than the public hand count is stale rather than usable, so
+    # that seat falls back to an ordinary random hand.
+    counts = {public.player: public.hand_count for public in view.players}
+    placed: dict[PlayerId, list[Card]] = {}
+    spoken: set[CardId] = set()
+    for seat, ids in known.items():
+        if seat == view.viewer or not ids or len(ids) > counts[seat]:
+            continue
+        cards = [card for card in unseen if card.id in ids]
+        if len(cards) != len(ids):  # a known card is no longer unseen; distrust it
+            continue
+        placed[seat] = cards
+        spoken.update(ids)
+
+    pool = [card for card in unseen if card.id not in spoken]
     rng.shuffle(pool)
     cursor = 0
     players: dict[PlayerId, PlayerState] = {}
@@ -539,8 +595,10 @@ def _determinize(view: PlayerView, rng: random.Random) -> GameState:
         if public.player == view.viewer:
             hand = list(view.hand)
         else:
-            hand = pool[cursor : cursor + public.hand_count]
-            cursor += public.hand_count
+            hand = list(placed.get(public.player, ()))
+            wanted = public.hand_count - len(hand)
+            hand.extend(pool[cursor : cursor + wanted])
+            cursor += wanted
         players[public.player] = PlayerState(
             hand=hand, face_up=list(public.face_up), face_down=face_down
         )

@@ -21,6 +21,7 @@ from shed.agents.research import (
     RETENTION,
     _block_chance,
     _determinize,
+    _known_cards,
     _race_multiplier,
     _shortlist,
     _static_choice,
@@ -33,6 +34,7 @@ from shed.engine import (
     Move,
     Phase,
     PickUp,
+    PilePickedUp,
     Play,
     PlayerId,
     PlayerView,
@@ -605,6 +607,58 @@ def test_a_sampled_world_is_one_this_observation_could_have_come_from(
             assert len(held.hand) == public.hand_count
             assert tuple(sorted(held.face_down)) == public.face_down_slots
             assert [c.id for c in held.face_up] == [c.id for c in public.face_up]
+
+
+def test_a_sampled_world_puts_known_cards_back_where_they_were_seen(
+    picker: DeckPicker,
+) -> None:
+    """A pickup is evidence, and every sample must agree with it.
+
+    The opponent is recorded taking two cards, so a world that deals those cards
+    anywhere else is a world this observation rules out. Sampling repeatedly
+    would find such a world quickly if the placement were random.
+    """
+    state = build_play_state(
+        picker,
+        hands={FIRST_SEAT: picker.take(Rank.FIVE, 2), SECOND_SEAT: picker.take(Rank.KING, 2)},
+        draw_count=8,
+    )
+    view = _actor_view(state)
+    taken = list(state.draw_pile[:2])
+    seen = replace(view, history=(PilePickedUp(player=SECOND_SEAT, cards=tuple(taken)),))
+
+    assert _known_cards(seen)[SECOND_SEAT] == {card.id for card in taken}
+    rng = random.Random(5)
+    for _ in range(25):
+        world = _determinize(seen, rng)
+
+        held = {card.id for card in world.players[SECOND_SEAT].hand}
+        assert {card.id for card in taken} <= held
+        assert len(world.players[SECOND_SEAT].hand) == seen.players[1].hand_count
+
+
+def test_a_stale_known_slice_does_not_break_a_sample(picker: DeckPicker) -> None:
+    """Evidence that outruns the public hand count is dropped, not trusted.
+
+    A seat recorded taking four cards but holding two must have played some of
+    them in a way this reader did not follow; the sample falls back to an
+    ordinary random hand rather than dealing a hand it cannot fill.
+    """
+    state = build_play_state(
+        picker,
+        hands={FIRST_SEAT: picker.take(Rank.FIVE, 2), SECOND_SEAT: picker.take(Rank.KING, 2)},
+        draw_count=8,
+    )
+    view = _actor_view(state)
+    too_many = tuple(state.draw_pile[:4])
+    stale = replace(view, history=(PilePickedUp(player=SECOND_SEAT, cards=too_many),))
+    rng = random.Random(6)
+
+    for _ in range(10):
+        world = _determinize(stale, rng)
+
+        validate_decision_boundary(world)
+        assert len(world.players[SECOND_SEAT].hand) == 2
 
 
 def test_the_search_runs_only_once_the_draw_pile_is_empty(picker: DeckPicker) -> None:
