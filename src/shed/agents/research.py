@@ -96,6 +96,7 @@ from shed.engine import (
 
 __all__ = [
     "BLOCK_WEIGHT",
+    "ENDGAME_DRAW_LIMIT",
     "ENDGAME_MARGIN",
     "ENDGAME_SAMPLES",
     "ENDGAME_WIDTH",
@@ -175,6 +176,15 @@ premium is added on top of the pile term whenever the next seat holds
 flat anywhere between roughly 6 and 15, so nothing here balances on the value.
 """
 
+ENDGAME_DRAW_LIMIT = 0
+"""Cards left in the draw pile at which a decision still counts as endgame.
+
+Zero means the search waits for the deck to run out. That is where a rollout
+reaches a real winner cheaply; with cards still to draw it has to guess at every
+replenishment, and the same search run over those positions measured worse than
+no search at all.
+"""
+
 ENDGAME_SAMPLES = 8
 """Worlds sampled per searched decision.
 
@@ -196,14 +206,6 @@ ENDGAME_MARGIN = 3.0
 
 A move the static score dislikes by more than this is not close, and searching it
 would spend samples separating options that are not in contention.
-"""
-
-ENDGAME_OVERRIDE = 0.125
-"""Share of samples by which search must beat the static pick to replace it.
-
-The static choice is the incumbent. Requiring a clear margin -- an eighth of the
-samples -- keeps sampling noise from unseating a decision the heuristic got right,
-which is what separates this from the mid-game search that measured worse.
 """
 
 ENDGAME_TIME_FLOOR = 0.5
@@ -774,16 +776,20 @@ class ResearchAgent(Agent):
             reach the end of the game cheaply, and a truncated one measured worse
             than no search at all.
         """
-        return view.draw_count == 0 and view.phase is not Phase.SETUP
+        return view.draw_count <= ENDGAME_DRAW_LIMIT and view.phase is not Phase.SETUP
 
     def _search(self, view: PlayerView, fallback: Move, turn: TurnContext) -> Move:
         """Compare shortlisted moves on shared sampled worlds.
 
         Every candidate is played out on the *same* worlds with the same rollout
         seeds, so the comparison is paired and most of the sampling noise cancels
-        rather than deciding the move. The static pick is the incumbent and is
-        only replaced when a rival wins by :data:`ENDGAME_OVERRIDE` of the
-        samples.
+        rather than deciding the move. The static pick is the incumbent and keeps
+        the decision on a tie, but nothing more than that is held back for it: a
+        margin requirement was measured and cost about four points, because a
+        rollout that reaches a real winner is a better authority here than the
+        score is. That is the opposite of the mid-game search, where the same
+        rollouts had to be cut off at a horizon and the margin was what kept their
+        noise from doing damage.
 
         Search is an optimization, never a risk to the decision: anything raised
         inside it -- an exhausted pool, an engine refusal, a sample that is not a
@@ -821,7 +827,7 @@ class ResearchAgent(Agent):
                 return fallback
             held = short.index(fallback) if isinstance(fallback, Play) and fallback in short else 0
             best = max(range(len(short)), key=lambda i: wins[i])
-            if wins[best] <= wins[held] + ENDGAME_OVERRIDE * taken:
+            if wins[best] <= wins[held]:
                 return fallback
             return short[best]
         except Exception:
