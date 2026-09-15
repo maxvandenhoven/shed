@@ -64,8 +64,8 @@ def _score(move: Move, ranks: Mapping[CardId, Rank]) -> tuple[int, ...]:
     """Score one candidate move; smaller sorts better.
 
     Arrangements sort by the negated retention sum of the cards they leave face
-    up, so the largest sum wins. Plays sort by negated batch size first -- shed
-    as many cards as possible -- and then by the retention score of the rank
+    up, so the largest sum wins. Plays sort by negated batch size first (shed
+    as many cards as possible) and then by the retention score of the rank
     spent, so among equally sized plays the cheapest cards go first. Blind
     reveals and a forced pickup offer nothing to compare: every reveal hides the
     same unknown, and a pickup is the only action when it appears at all.
@@ -134,6 +134,6 @@ class GreedyAgent(Agent):
         scored = [(_score(move, ranks), move) for move in moves]
         best = min(key for key, _ in scored)
         # The tied list keeps the engine's move order, so the seeded choice
-        # among equals is reproducible rather than dependent on iteration luck.
+        # among equals is reproducible, not dependent on iteration luck.
         tied = [move for key, move in scored if key == best]
         return self._rng.choice(tied)

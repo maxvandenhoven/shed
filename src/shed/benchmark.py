@@ -9,31 +9,31 @@ runner's costs and are measured nowhere in this file.
 Four things are measured separately, because they are charged separately during
 a search and mixing them would hide which one dominates:
 
-* **Legality** -- :meth:`~shed.engine.GameState.get_legal_moves` alone. No
+* **Legality**: :meth:`~shed.engine.GameState.get_legal_moves` alone. No
   observation is built, so this is the cost of grouping the active zone and
   comparing ranks, and nothing else.
-* **Transitions** -- one :meth:`~shed.engine.GameState.apply_move` followed by
+* **Transitions**: one :meth:`~shed.engine.GameState.apply_move` followed by
   the matching :meth:`~shed.engine.GameState.undo_move`, timed as a pair
   because that is how a search spends them. Both ends copy the whole position:
   ``apply_move`` snapshots before mutating and ``undo_move`` copies the snapshot
   back, which is the deliberate first-release choice the specification asks to
   measure before anything cheaper is attempted.
-* **Observations** -- :meth:`~shed.engine.GameState.observe`. This is *not*
+* **Observations**: :meth:`~shed.engine.GameState.observe`. This is *not*
   legality-free: ``observe`` generates the acting seat's legal moves to fill
   ``PlayerView.legal_moves``, and does so whoever is viewing, so an observation
   costs a legal-move generation plus the snapshot around it. The two rows are
-  reported side by side precisely so that inclusion is visible rather than
-  implied. History is passed in already filtered and stored by reference, so its
+  reported side by side precisely so that inclusion is visible, not hidden as
+  an implication. History is passed in already filtered and stored by reference, so its
   length does not drive this measurement; filtering it belongs to the runner.
-* **Playout throughput** -- complete random games driven straight through
+* **Playout throughput**: complete random games driven straight through
   ``get_legal_moves`` and ``apply_move``, with no view, no agent, and no clock.
   The deal is inside the timed region because it is engine work too.
 
-Fixtures are discovered rather than hand-written: seeded random games are played
+Fixtures are discovered, not hand-written: seeded random games are played
 and the first position matching each wanted shape is copied out. That keeps them
-representative of positions the engine actually reaches -- a hand grown by a
-pickup, a forced pickup, a burn, the face-up collection, a blind reveal -- rather
-than of positions chosen to look fast, and it keeps them reproducible, since the
+representative of positions the engine actually reaches (a hand grown by a
+pickup, a forced pickup, a burn, the face-up collection, a blind reveal), not
+of positions chosen to look fast, and it keeps them reproducible, since the
 same seed finds the same positions.
 
 Timings are wall-clock :func:`time.perf_counter` totals over a loop of a fixed
@@ -218,7 +218,7 @@ class Timing:
 
     Attributes:
         measurement: Which of the four measurements this row belongs to.
-        subject: What was measured on -- a fixture name, or the playout
+        subject: What was measured on: a fixture name, or the playout
             configuration.
         unit: The singular name of one operation, such as ``call`` or ``pair``.
         operations: Operations performed in each repeat.
@@ -306,7 +306,7 @@ class BenchmarkConfig:
         Raises:
             ValueError: If the player count is outside the profile's range or
                 any of the counts is not positive. A zero-iteration measurement
-                would divide by zero rather than report a fast engine.
+                would divide by zero instead of reporting a fast engine.
         """
         rules = DEFAULT_RULES
         if not rules.min_players <= self.players <= rules.max_players:
@@ -353,8 +353,8 @@ def _burning_play(state: GameState) -> Move | None:
         state: The position to inspect.
 
     Returns:
-        A ten, or a batch of four of one rank -- the two ways ``shed-v1`` burns
-        in a single action -- or ``None`` when neither is available. The pile
+        A ten, or a batch of four of one rank (the two ways ``shed-v1`` burns
+        in a single action), or ``None`` when neither is available. The pile
         must be worth burning: burning an empty pile is legal but is not the
         transition this fixture exists to measure.
     """
@@ -413,9 +413,9 @@ def _grown_hand_move(state: GameState) -> Move | None:
         state: The position to inspect.
 
     Returns:
-        The first legal move for an actor holding at least eight cards -- a hand
+        The first legal move for an actor holding at least eight cards (a hand
         a pickup grew well past the refill target, which is where rank grouping
-        has the most to do -- or ``None`` otherwise.
+        has the most to do), or ``None`` otherwise.
     """
     if state.phase is not Phase.PLAY or state.current_player is None:
         return None
@@ -498,7 +498,7 @@ def build_fixtures(
 
     Raises:
         RuntimeError: If a shape was not reached within the search budget, which
-            means the fixture set needs a different seed rather than a silently
+            means the fixture set needs a different seed, not a silently
             shorter report.
     """
     seeds = random.Random(seed)
@@ -718,9 +718,9 @@ def _playout(state: GameState, rng: random.Random) -> int:
 def measure_playouts(config: BenchmarkConfig) -> tuple[tuple[Timing, ...], int, int]:
     """Measure engine-only random playout throughput.
 
-    Every repeat plays the same games -- the deal seeds and move seeds are drawn
-    once, before the first repeat -- so the repeats are comparable and their
-    spread is machine noise rather than a different amount of work. The deal is
+    Every repeat plays the same games (the deal seeds and move seeds are drawn
+    once, before the first repeat), so the repeats are comparable and their
+    spread is machine noise, not a different amount of work. The deal is
     inside the timed region: shuffling and dealing is engine work, and a search
     that starts games pays for it.
 
@@ -728,10 +728,10 @@ def measure_playouts(config: BenchmarkConfig) -> tuple[tuple[Timing, ...], int, 
         config: Playout and repeat counts, the player count, and the seed.
 
     Returns:
-        A triple of the two timings -- the same run reported per game and per
-        decision -- the decisions one repeat resolved, and how many of the
-        playouts were truncated at :data:`MAX_PLAYOUT_DECISIONS` rather than
-        ending.
+        A triple of the two timings (the same run reported per game and per
+        decision), the decisions one repeat resolved, and how many of the
+        playouts were truncated at :data:`MAX_PLAYOUT_DECISIONS` instead of
+        ending normally.
     """
     seeds = random.Random(config.seed)
     games = [(seeds.randrange(2**32), seeds.randrange(2**32)) for _ in range(config.playouts)]

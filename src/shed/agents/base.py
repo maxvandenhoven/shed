@@ -9,8 +9,8 @@ observation carries, and its own independent seed.
 Legal choices come from ``view.legal_moves``. The engine is the single legality
 authority: an agent never recomputes legality, never needs a rules object of its
 own, and works with typed :class:`~shed.engine.Move` objects that it neither
-encodes nor decodes. The turn is only a channel -- submit a candidate, ask how
-much time is left -- and the runner stays free to reject anything illegal.
+encodes nor decodes. The turn is only a channel (submit a candidate, ask how
+much time is left) and the runner stays free to reject anything illegal.
 
 This module is the root of the package: it imports engine types and nothing from
 ``shed.agents`` itself. Strategies import their base class from here, and
@@ -18,7 +18,7 @@ This module is the root of the package: it imports engine types and nothing from
 dependencies inside the package run one way and no import is deferred into a
 function body.
 
-``TurnContext`` is defined beside its *consumer* rather than beside an
+``TurnContext`` is defined beside its consumer, not beside an
 implementation. The concrete pipe-backed context belongs to the match runner,
 which already imports this package to build agents; declaring the protocol there
 would make the two packages import each other.
@@ -39,8 +39,8 @@ class TurnContext(Protocol):
     """The whole capability an agent holds during one decision.
 
     The protocol is deliberately tiny: a way to submit candidates and a way to
-    ask how much time is left. It exposes no legal moves -- those live on the
-    view -- no game state, and no way to observe what the runner selected.
+    ask how much time is left. It exposes no legal moves (those live on the view), no game state, and no
+    way to observe what the runner selected.
 
     Submissions are fire-and-forget: nothing is acknowledged, and the runner
     remains the legality authority, so a submitted move is a proposal rather
@@ -53,7 +53,7 @@ class TurnContext(Protocol):
 
         Returns:
             Seconds until the decision's deadline, clamped to zero. This value
-            is a cooperative hint; the match runner enforces the deadline.
+            is a cooperative hint. The match runner enforces the deadline.
         """
 
     def submit(self, move: Move, *, final: bool = False) -> None:
@@ -74,11 +74,11 @@ class Agent(ABC):
 
     A subclass implements :meth:`think` and nothing else is required of it. The
     base class owns only the agent's dedicated generator, because every strategy
-    needs seeded randomness somewhere -- tie-breaking at minimum -- and the
+    needs seeded randomness somewhere (tie-breaking at minimum) and the
     factory always supplies a seed for it.
 
-    A strategy should draw every random choice from this generator rather than
-    from module-global randomness. The runner records the seed behind it, so its
+    A strategy should draw every random choice from this generator, not from
+    module-global randomness. The runner records the seed behind it, so its
     choices can be explained afterwards, and a decision runs in a worker process
     whose module-global generators are outside the runner's control.
 

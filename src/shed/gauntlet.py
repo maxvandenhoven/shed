@@ -1,8 +1,8 @@
 """Sequential evaluation: match schedules, independent seeds, and accounting.
 
 The gauntlet is the layer above the match runner and it owns nothing the runner
-already owns. It decides *which* matches to play -- one fixed deal per entry in
-the deal bank, played once per cyclic seat rotation -- derives the independent
+already owns. It decides *which* matches to play (one fixed deal per entry in
+the deal bank, played once per cyclic seat rotation), derives the independent
 seed streams each of those matches runs on, plays them one after another, and
 adds up what came back. Every authoritative :class:`~shed.engine.GameState`
 still lives inside a :class:`~shed.match.MatchRunner`, and no rule, legality
@@ -13,11 +13,11 @@ Three properties are deliberate:
 * **Sequential.** Matches are played one at a time in :func:`run_gauntlet`,
   because the budget a timed agent is given is wall time. Two matches running
   side by side would have their agents competing for the same cores, so the
-  comparison would measure the machine's load rather than the strategies.
+  comparison would measure the machine's load, not the strategies.
 * **Deterministic.** :func:`build_schedule` is pure: the same participants and
   the same :class:`GauntletConfig` produce the same schedule, seeds included.
   Seeds come from :func:`derive_seed`, a SHA-256 of a canonical JSON payload,
-  rather than from Python's ``hash()``, which is randomized per interpreter.
+  instead of Python's ``hash()``, which is randomized per interpreter.
   The deck, agent, and fallback streams are derived under separate purposes, so
   an agent's seed can never be a function of the deal it is playing, and a
   fallback draw cannot disturb the deck.
@@ -31,8 +31,8 @@ Rotations are *cyclic*: for a lineup of ``n`` participants, deal ``d`` is played
 ``n`` times, with participant ``p`` sitting in seat ``(p + rotation) % n``. That
 gives every participant every seat on every deal, which is what makes the seat
 breakdown fair. It does **not** enumerate every seating permutation for three or
-more participants -- the participants keep their cyclic order relative to each
-other -- so it controls for seat advantage but not for who sits to whose left.
+more participants (the participants keep their cyclic order relative to each
+other), so it controls for seat advantage but not for who sits to whose left.
 An all-permutations schedule is future work.
 
 Nothing here decodes external input. The command-line script validates what a
@@ -93,12 +93,12 @@ each carrying their own version, and the two can move independently.
 def derive_seed(experiment_seed: int, purpose: str, *fields: int) -> int:
     """Derive one independent seed from the experiment seed.
 
-    The payload is canonical JSON -- fixed field order, no incidental whitespace
-    -- hashed with SHA-256 and reduced into :data:`SEED_SPACE`. Python's built-in
+    The payload is canonical JSON (fixed field order, no incidental whitespace)
+    hashed with SHA-256 and reduced into :data:`SEED_SPACE`. Python's built-in
     ``hash()`` is deliberately not used: it is randomized per interpreter, so a
     schedule built with it would not reproduce across runs.
 
-    Streams are separated by ``purpose`` rather than by arithmetic on one
+    Streams are separated by ``purpose`` instead of arithmetic on one
     counter, so adding a stream cannot shift an existing one, and a deck seed
     and an agent seed for the same match are unrelated values.
 
@@ -322,7 +322,7 @@ class Rate:
 
     Pairing the two is the point: a win count is meaningless without the number
     of matches it came from, and a gauntlet reports several denominators that
-    are easy to confuse -- matches played, matches finished, decisions taken.
+    are easy to confuse (matches played, matches finished, decisions taken).
 
     Attributes:
         count: How many times the thing happened.
@@ -337,7 +337,7 @@ class Rate:
         """Return the ratio, or ``None`` when nothing was measured.
 
         Returns:
-            ``count / total``, or ``None`` for an empty denominator rather than
+            ``count / total``, or ``None`` for an empty denominator instead of
             a fabricated zero.
         """
         return None if self.total == 0 else self.count / self.total
@@ -347,9 +347,9 @@ class Rate:
 class Distribution:
     """A small summary of a sample: how many, and where its middle is.
 
-    Mean and median are both reported because selection times are skewed -- a
+    Mean and median are both reported because selection times are skewed: a
     decision that reaches the deadline sits well above one an agent finalized
-    immediately -- and either alone would be misleading.
+    immediately, and either alone would be misleading.
 
     Attributes:
         count: Sample size.
@@ -631,7 +631,7 @@ def _participant_report(
         seat_wins[seat] += won
         # The lineup is fixed for a run, so a participant faces one opposition;
         # the key is computed per match anyway, so a schedule that ever mixes
-        # lineups would split these rows rather than silently pool them.
+        # lineups would split these rows instead of silently pooling them.
         key = _opponents_key(participants, index)
         tally = opponents.setdefault(key, [0, 0])
         tally[0] += won
@@ -761,7 +761,7 @@ def run_gauntlet(
     Matches run sequentially and each one gets a fresh runner, so no two timed
     agents ever compete for the same cores and no state survives from one match
     into the next. A failed or truncated match is recorded and the schedule
-    continues: the run reports what happened rather than stopping at the first
+    continues. The run reports what happened instead of stopping at the first
     disappointment.
 
     Args:
@@ -811,8 +811,8 @@ def _encode_rate(rate: Rate) -> JsonObject:
         rate: The measurement.
 
     Returns:
-        The count, the denominator, and the ratio -- ``null`` when nothing was
-        measured, never a fabricated zero.
+        The count, the denominator, and the ratio (``null`` when nothing was
+        measured, never a fabricated zero).
     """
     return {"count": rate.count, "total": rate.total, "rate": rate.value}
 
@@ -968,8 +968,8 @@ def gauntlet_document(
         source_revision: Commit the run was played at, when it is known. Pass
             :func:`~shed.replay.detect_source_revision` for the ordinary case.
         replays: Whether to embed each match's replay document. Keeping them
-            makes the file self-contained -- every finished match in it can be
-            verified with :func:`~shed.replay.verify_replay` -- at the cost of
+            makes the file self-contained: every finished match in it can be
+            verified with :func:`~shed.replay.verify_replay`, at the cost of
             its size.
 
     Returns:

@@ -8,9 +8,9 @@ without creating a cycle.
 
 Every constructor here takes correctly typed domain objects and assumes its
 annotations hold: ``Play`` takes a ``Rank``, never an integer it converts.
-``__post_init__`` checks domain invariants only -- non-negative identifiers,
+``__post_init__`` checks domain invariants only (non-negative identifiers,
 positive counts, playable sources, distinct arrangement IDs, joker/suit
-consistency -- and never coerces or type-checks its inputs. ``ty`` enforces the
+consistency) and never coerces or type-checks its inputs. ``ty`` enforces the
 annotations for engine callers; untyped external data belongs to the future
 replay and transport layers, which validate it where it is decoded and construct
 these objects before calling the engine.
@@ -195,7 +195,7 @@ class PublicPlayerState:
     """What everybody knows about one player.
 
     Shared by observations and by the events that announce a deal, so it lives
-    with the other value types rather than in either consumer.
+    with the other value types, not in either consumer.
 
     Attributes:
         player: The described seat.
@@ -355,13 +355,13 @@ class RulesConfig:
     """The fixed ``shed-v1`` rules profile.
 
     The first release supports exactly one profile. The fields document its
-    numbers rather than offering configuration: :meth:`validate` rejects any
+    numbers, not offering configuration. :meth:`validate` rejects any
     changed value so a modified profile can never claim to be ``shed-v1``.
 
     Like every type here, the profile assumes its annotations: the fields are
     integers, and a decoder is responsible for rejecting external data that only
     looks like one (``3.0`` is not ``initial_hand_size``). Validation covers the
-    domain question instead -- whether a correctly typed profile is the one this
+    domain question: whether a correctly typed profile is the one this
     release implements.
 
     Attributes:
@@ -417,15 +417,14 @@ class RulesConfig:
 DEFAULT_DEALER: PlayerId = PlayerId(0)
 """Default dealing seat.
 
-A module-level constant rather than a ``PlayerId(0)`` call in a default
-argument, so signatures stay free of calls while the documented default value is
-unchanged.
+A module-level constant, not a ``PlayerId(0)`` call in a default argument, so
+signatures stay free of calls while the documented default value is unchanged.
 """
 
 DEFAULT_RULES = RulesConfig()
 """The single supported profile, used as the default wherever config is taken.
 
-A module constant rather than a call in a default argument: the profile is
+A module constant, not a call in a default argument. The profile is
 frozen, so one shared instance is safe and keeps signatures side-effect free.
 """
 

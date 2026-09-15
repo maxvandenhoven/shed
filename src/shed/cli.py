@@ -7,12 +7,12 @@ actions, and summarizing how one ended. Both the play command and the replay
 command use these, and the gauntlet command will.
 
 How much a command prints is one object, :class:`ConsoleStyle`, threaded through
-every renderer here rather than a growing list of flags. It carries two
+every renderer instead of a growing list of flags. It carries two
 independent settings, and both defaults are the quiet ones.
 
 :attr:`ConsoleStyle.visibility` decides what may be shown. Under
 :attr:`Visibility.PUBLIC` a private event is reported by its public count alone
--- the same thing an opponent at the table knows -- and everything else printed
+(the same thing an opponent at the table knows) and everything else printed
 is public by construction: cards already on the table, the pile, a revealed
 card. Under :attr:`Visibility.OMNISCIENT` the identities are printed too, and
 :func:`describe_position` will dump the authoritative position on top.
@@ -105,9 +105,9 @@ RANK_TEXT: dict[Rank, str] = {
 }
 """Short rank labels, so a batch of cards reads as one compact group.
 
-Ten is spelled out rather than abbreviated to the ``T`` of card shorthand. The
+Ten is spelled out, not abbreviated to the ``T`` of card shorthand. The
 abbreviation is a convention a reader has to know, it buys no real alignment
-here -- nothing is column-aligned, and the joker is two characters regardless --
+here (nothing is column-aligned, and the joker is two characters regardless)
 and ten is the rank a reader of this game scans for, since it burns the pile.
 """
 
@@ -116,8 +116,8 @@ class Visibility(Enum):
     """How much of a recorded game the console is allowed to show.
 
     Attributes:
-        PUBLIC: What an onlooker at the table knows. Private events -- the deal
-            and every replenishment draw -- are reported by count only. This is
+        PUBLIC: What an onlooker at the table knows. Private events (the deal
+            and every replenishment draw) are reported by count only. This is
             the default everywhere.
         OMNISCIENT: Everything the record holds, identities included. An opt-in
             operator view of a match that has already been played; it changes
@@ -132,7 +132,7 @@ class Visibility(Enum):
 class ConsoleStyle:
     """Everything the console renderers need to know about presentation.
 
-    One object rather than one parameter per setting: they all travel the same
+    One object instead of one parameter per setting: they all travel the same
     way, from a command's arguments down to a single card, and a new setting
     should not change five signatures.
 
@@ -156,7 +156,7 @@ def console_style(*, omniscient: bool, show_suits: bool) -> ConsoleStyle:
     """Build the style a command's presentation switches ask for.
 
     Both commands map the same two switches the same way, so the mapping lives
-    here rather than in each parser.
+    here, not in each parser.
 
     Args:
         omniscient: Whether the operator asked to see hidden information.
@@ -174,7 +174,7 @@ def console_style(*, omniscient: bool, show_suits: bool) -> ConsoleStyle:
 DEFAULT_STYLE = ConsoleStyle()
 """Public commentary without suits: what a command prints unless asked otherwise.
 
-A module constant rather than a call in a default argument. The style is frozen,
+A module constant, not a call in a default argument. The style is frozen,
 so one shared instance is safe.
 """
 
@@ -182,7 +182,7 @@ so one shared instance is safe.
 def card_text(card: Card, style: ConsoleStyle = DEFAULT_STYLE) -> str:
     """Render one card compactly.
 
-    Deliberately ASCII -- ``10h`` rather than a suit symbol -- because this goes
+    Deliberately ASCII (``10h`` instead of a suit symbol) because this goes
     to whatever console the user has, and a replay summary is not worth an
     encoding failure.
 
@@ -207,8 +207,8 @@ def _reading_order(card: Card) -> tuple[int, int]:
 
     Sorting by identifier alone would not look sorted. Identifiers run suit by
     suit, so a hand of the ace of clubs, the nine of diamonds and a joker comes
-    out ``A 9 JK`` -- and with suits hidden, which is the default, there is
-    nothing on screen to explain the order. Rank first fixes that, and the
+    out ``A 9 JK``. With suits hidden (the default) there is nothing on screen
+    to explain the order. Rank first fixes that, and the
     identifier breaks ties so the result is still deterministic and still groups
     a rank by suit when suits are shown.
 
@@ -224,8 +224,8 @@ def _reading_order(card: Card) -> tuple[int, int]:
 def _cards_text(cards: Iterable[Card], style: ConsoleStyle) -> str:
     """Render a group of cards in reading order, so it is easy to digest.
 
-    Every group this renders -- a dealt hand, a draw, a played batch, a set of
-    face-up cards, a pile taken into hand -- either has no meaningful order or
+    Every group this renders (a dealt hand, a draw, a played batch, a set of
+    face-up cards, a pile taken into hand) either has no meaningful order or
     ends up somewhere that has none. Sorting them all means the same cards look
     the same wherever they appear. The orders that *are* meaningful belong to
     the discard and draw piles, which :func:`_pile_text` renders instead.
@@ -461,7 +461,7 @@ def build_participants(kinds: Sequence[str]) -> tuple[AgentSpec, ...]:
     """Build one participant per requested agent kind.
 
     Labels are derived from the position in the lineup, so a lineup may repeat a
-    kind -- two greedy agents become ``greedy-0`` and ``greedy-1`` -- and every
+    kind (two greedy agents become ``greedy-0`` and ``greedy-1``) and every
     participant still has a distinct name in results. Distinct labels matter
     most in a gauntlet, where participants change seats between matches and the
     label is the only thing that follows one of them around.
@@ -514,7 +514,7 @@ def restore_default_sigpipe() -> None:
     other program in a pipeline. Call it from a script's main guard only: it
     changes process-wide signal state and has no business running on import.
 
-    On a platform without ``SIGPIPE`` -- Windows -- this does nothing.
+    On a platform without ``SIGPIPE`` (Windows) this does nothing.
     """
     if hasattr(signal, "SIGPIPE"):
         signal.signal(signal.SIGPIPE, signal.SIG_DFL)
@@ -532,7 +532,7 @@ def positive_seconds(text: str) -> float:
     Raises:
         argparse.ArgumentTypeError: If it is not a number, or is not positive
             and finite. Infinity and NaN are rejected here so the failure names
-            the option rather than surfacing from the match configuration.
+            the option, not surfacing from the match configuration.
     """
     try:
         value = float(text)
@@ -866,9 +866,9 @@ def gauntlet_summary(report: GauntletReport) -> list[str]:
 
     The layout is deliberately flat: a header, the status accounting, the
     results table, the head-to-head rows, the decision diagnostics, and finally
-    every match that did not finish. Nothing is hidden -- a truncated or aborted
-    match appears in the status line and again by name at the bottom, and is
-    never folded into somebody's losses -- and no win rate is printed without the
+    every match that did not finish. Nothing is hidden: a truncated or aborted
+    match appears in the status line and again by name at the bottom and is
+    never folded into somebody's losses. No win rate is printed without the
     denominator it came from.
 
     Args:
@@ -974,7 +974,7 @@ def _duration_scale(seconds: float) -> tuple[float, str]:
 def _duration_text(seconds: float, scale: tuple[float, str]) -> str:
     """Render one duration in a chosen unit.
 
-    The unit is passed in rather than chosen per value, so a column of durations
+    The unit is passed in, not chosen per value, so a column of durations
     is all in the same unit and its magnitudes can be compared by eye.
 
     Args:
@@ -1044,8 +1044,8 @@ def _fixture_table(report: BenchmarkReport) -> list[str]:
     """Build the table of fixture sizes.
 
     A timing means nothing without the position it was measured on, so the sizes
-    that drive the work -- the actor's zones, the piles, the moves generated, and
-    the history handed to an observation -- are printed before any duration.
+    that drive the work (the actor's zones, the piles, the moves generated, and
+    the history handed to an observation) are printed before any duration.
 
     Args:
         report: The completed run.
@@ -1086,11 +1086,11 @@ def _fixture_table(report: BenchmarkReport) -> list[str]:
 def benchmark_summary(report: BenchmarkReport) -> list[str]:
     """Summarize a benchmark run for the console.
 
-    The layout puts provenance first -- machine, interpreter, and how much of
-    each measurement ran -- then the fixture sizes, then one table per
+    The layout puts provenance first (machine, interpreter, and how much of
+    each measurement ran), then the fixture sizes, then one table per
     measurement, and finally the caveats. Every duration is the fastest of the
     repeats, and the spread beside it says how much the slowest differed, so a
-    noisy machine is visible rather than averaged away.
+    noisy machine is visible, not averaged away.
 
     Args:
         report: The completed run.

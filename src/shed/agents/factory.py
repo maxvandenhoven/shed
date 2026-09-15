@@ -47,7 +47,7 @@ class AgentSpec:
     def __post_init__(self) -> None:
         """Check the kind is buildable and the label is usable.
 
-        Validating here rather than in :func:`build_agent` means a mistyped
+        Validating here instead of in :func:`build_agent` means a mistyped
         lineup fails where it is written, not inside a worker process at
         decision time.
 
@@ -65,14 +65,14 @@ class AgentSpec:
 def build_agent(spec: AgentSpec, *, seed: int) -> Agent:
     """Build a fresh agent for one decision.
 
-    Construction is explicit rather than discovered: the built-in kinds are
+    Construction is explicit, not discovered. The built-in kinds are
     listed here, and adding a strategy means adding a branch and a kind.
 
     Args:
         spec: The participant to build. Its kind was already validated when the
             specification was created.
         seed: Seed for the new agent's generator. Pass a fresh value per
-            decision -- reusing one replays the same random stream -- and never
+            decision. Reusing one replays the same random stream. Never
             pass the deck or fallback seed.
 
     Returns:
