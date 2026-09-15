@@ -4,7 +4,7 @@
 including hidden assignments and deck order, and exposes the operations a
 trusted caller needs: create a game, list the actor's legal moves, observe it as
 one player, apply a move, and undo it. ``PlayerView`` is the immutable
-projection an agent receives -- public cards, the viewer's own hand, and the
+projection an agent receives: public cards, the viewer's own hand, and the
 moves that viewer may make.
 
 The deal helpers are split into a shuffle step and a pure dealing step so a
@@ -17,8 +17,8 @@ module builds state and operations on both. Nothing here imports agents, clocks,
 processes, or serialization.
 
 A decision is atomic. :meth:`GameState.apply_move` validates the move, snapshots
-the position, then resolves the whole chain -- transfer or reveal, burn or rank
-effect, pickup, replenishment, termination, and the next actor -- before
+the position, then resolves the whole chain (transfer or reveal, burn or rank
+effect, pickup, replenishment, termination, and the next actor) before
 returning. Any failure inside that boundary, including the closing invariant
 check, restores the snapshot, so a caller only ever sees the position before the
 decision or the position after it completes.
@@ -168,7 +168,7 @@ def _burn_reason(rank: Rank, count: int) -> BurnReason | None:
 def _constraint_after(rank: Rank, current: PlayConstraint) -> PlayConstraint:
     """Return the constraint a successful, non-burning play leaves behind.
 
-    The seven restriction lives in the constraint rather than in a countdown of
+    The seven restriction lives in the constraint, not in a countdown of
     players, so a transparent nine simply preserves whatever is already there:
     seven then nine still demands at most a seven, while seven then five leaves
     at least a five.
@@ -477,8 +477,8 @@ class GameState:
 
         Raises:
             StateInvariantError: If the position is not a valid live decision
-                boundary -- no actor scheduled, a refill still owed, or an actor
-                who holds no cards at all.
+                boundary (no actor scheduled, a refill still owed, or an actor
+                who holds no cards at all).
         """
         if self.phase is Phase.FINISHED:
             return ()
@@ -771,7 +771,7 @@ class GameState:
         """Remove the physical cards a rank/count play names from one zone.
 
         Suits never affect the outcome, so the engine picks the batch by
-        ascending card ID rather than asking the agent which physical cards it
+        ascending card ID instead of asking the agent which physical cards it
         meant. That keeps the action space small and the transition reproducible.
 
         Args:
@@ -850,7 +850,7 @@ class GameState:
     def _refill(self, actor: PlayerId) -> tuple[ObservedEvent, ...]:
         """Replenish one hand to the profile's target while the deck lasts.
 
-        Drawing is automatic rather than an agent decision, and never removes
+        Drawing is automatic, not an agent decision, and never removes
         cards from a hand that already holds at least the target. Cards come off
         the end of the draw pile, the draw position.
 

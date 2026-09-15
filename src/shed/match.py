@@ -2,8 +2,8 @@
 
 This module owns everything the engine deliberately does not: clocks, worker
 processes, pipe framing, message validation, and the records a match leaves
-behind. The engine stays pure -- it never learns that a decision was timed --
-and agents stay unaware of processes, because the only thing they touch here is
+behind. The engine stays pure (it never learns that a decision was timed) and agents
+stay unaware of processes, because the only thing they touch here is
 :class:`PipeTurnContext`, which implements the two-method turn protocol.
 
 The layers are separable on purpose:
@@ -13,22 +13,22 @@ The layers are separable on purpose:
   tested without a process, a pipe, or a real deadline.
 * :func:`run_agent_worker` is the worker body: build the agent, let it think
   against a pipe-backed turn, then report completion or failure.
-* :class:`MatchRunner` owns the lifecycle -- one freshly started process with
-  one fresh pipe and one fresh agent seed per decision -- and the match loop.
+* :class:`MatchRunner` owns the lifecycle (one freshly started process with
+  one fresh pipe and one fresh agent seed per decision) and the match loop.
 
 The trust model is the design's: local, cooperative Python agents sending small,
 well-formed messages. Validation here rejects malformed or illegal submissions
 and the parent independently enforces the deadline, but multiprocessing
 deserialization is not a security boundary and this is not a sandbox for hostile
-code. The budget is an *acceptance* deadline, not a promise that
-:meth:`MatchRunner.choose_move` returns at that instant: worker startup,
+code. The budget is an acceptance deadline. It does not promise that
+:meth:`MatchRunner.choose_move` returns at that instant, because worker startup,
 scheduling, message receipt, and reaping all add latency after it.
 
 No worker is ever forked from the runner, because that would hand the child a
 copy of the parent's memory, which is where the authoritative
 :class:`~shed.engine.GameState` lives. :func:`worker_context` picks the start
-method that avoids it -- ``forkserver`` where the platform has one, ``spawn``
-otherwise -- and documents why the forkserver keeps the same boundary. A worker
+method that avoids it (``forkserver`` where the platform has one, ``spawn``
+otherwise) and documents why the forkserver keeps the same boundary. A worker
 receives only its specification, a fresh seed, the observation, and its deadline;
 deck seeds, fallback seeds, authoritative state, and results never cross it.
 """
@@ -110,7 +110,7 @@ MAX_FAILURE_MESSAGE = 500
 MOVE_TYPES: tuple[type, ...] = (Arrange, Play, Reveal, PickUp)
 """Concrete move classes, for the shape check at the transport boundary.
 
-``Move`` is a type alias rather than a class, so it cannot be handed to
+``Move`` is a type alias, not a class, so it cannot be handed to
 ``isinstance``; this tuple is the runtime spelling of the same union.
 """
 
@@ -134,19 +134,19 @@ def worker_context() -> WorkerContext:
     ``forkserver`` keeps the same information boundary as ``spawn``. Its server
     process is created by fork *and immediate exec* of a fresh interpreter, so it
     holds none of the parent's Python objects, and workers are forked from that
-    server rather than from the runner. What the server does hold is
+    server, not from the runner. What the server does hold is
     :data:`PRELOADED_MODULES`, which is why a worker starts in roughly 14 ms
     instead of the 120 ms a full ``spawn`` costs. The first decision in a process
     still pays for booting the server.
 
     One consequence of forking from a shared server: workers inherit that server's
-    module-global state. For the standard library's ``random`` that is harmless --
+    module-global state. For the standard library's ``random`` that is harmless:
     it registers ``os.register_at_fork(after_in_child=...)``, so the global
-    generator reseeds itself in every forked child, which
-    ``tests.test_match_processes`` checks rather than assumes. Shed's own modules
+    generator reseeds itself in every forked child. ``tests.test_match_processes``
+    verifies this instead of assuming it. Shed's own modules
     hold only immutable constants, and its agents draw from the generator they
     were constructed with. An agent using a third-party global generator that
-    installs no such hook -- NumPy's legacy global is the usual example -- would
+    installs no such hook (NumPy's legacy global is the usual example) would
     get one shared stream across decisions, which is one more reason the agent
     contract asks strategies to use the generator they are given.
 
@@ -253,8 +253,8 @@ def _send(sender: Connection, message: WorkerMessage) -> bool:
 class PipeTurnContext:
     """The concrete turn an agent holds inside a worker process.
 
-    It mirrors the agent-facing protocol exactly -- submit a candidate, ask how
-    much time is left -- and holds no legal moves of its own: those stay on the
+    It mirrors the agent-facing protocol exactly (submit a candidate, ask how
+    much time is left) and holds no legal moves of its own: those stay on the
     observation the worker was given, so the boundary carries one copy of them.
 
     The local expiry and closed checks are a cooperative optimisation, not the
@@ -318,14 +318,14 @@ def run_agent_worker(
     """Build one agent, let it think, and report how the decision ended.
 
     This is the worker body, shared by the process entry point and by tests that
-    script an agent's behaviour. The agent is constructed here rather than
-    passed in, so no live object and no generator state ever crosses a process
-    boundary.
+    script an agent's behaviour. The agent is constructed here instead of
+    being passed in, so no live object and no generator state ever crosses a
+    process boundary.
 
     The broad exception handler is the worker boundary the design asks for: an
-    agent raising is ordinary strategy failure, reported to the parent as data
-    rather than propagated as a crash. ``BaseException`` is deliberately not
-    caught -- an interrupted or terminated worker is the parent's business, and
+    agent raising is ordinary strategy failure. It is reported to the parent as
+    data, not propagated as a crash. ``BaseException`` is deliberately not
+    caught. An interrupted or terminated worker is the parent's business, and
     the parent sees the pipe close.
 
     Args:
@@ -424,7 +424,7 @@ def _canonical_candidate(message: Submission, legal_moves: tuple[Move, ...]) -> 
     This is the transport boundary, so the checks are about the message rather
     than the game: a well-formed final flag, a recognised move shape, and
     membership in the tuple frozen when the decision opened. Legality is decided
-    against that tuple alone -- nothing is recomputed, and the engine revalidates
+    against that tuple alone. Nothing is recomputed, and the engine revalidates
     independently when the move is applied.
 
     Args:
@@ -542,7 +542,7 @@ def _shutdown_worker(
     Polling inside a worker cannot interrupt an infinite loop, so the parent
     stops it here: terminate, wait briefly, then kill. Process resources are
     released only once the process has actually stopped, and the pipe is
-    discarded rather than reused, so no message can survive into a later turn.
+    discarded, not reused, so no message can survive into a later turn.
 
     Args:
         process: The decision's worker. An unstarted process is only closed.
@@ -553,7 +553,7 @@ def _shutdown_worker(
         The worker's exit status, or ``None`` if it was never started. Zero means
         it finished on its own; a negative value is the signal it was stopped
         with, which distinguishes an agent that returned from one the parent had
-        to interrupt. This is diagnostic only -- the decision was already made
+        to interrupt. This is diagnostic only. The decision was already made
         before cleanup began.
     """
     exit_code: int | None = None
@@ -769,8 +769,8 @@ class MatchConfig:
         """Check the budget and the action limit are usable.
 
         Raises:
-            ValueError: If the budget is not strictly positive and finite --
-                NaN and infinity are rejected here -- or the action limit is not
+            ValueError: If the budget is not strictly positive and finite
+                (NaN and infinity are rejected here) or the action limit is not
                 positive.
         """
         budget = self.seconds_per_turn
@@ -818,7 +818,7 @@ class MatchResult:
         turns: Every selection in order, applied or not.
         initial_events: The full events describing the deal.
         decisions: The applied-decision stream, in order. A move selected but
-            not applied -- strict mode aborts before applying -- is in
+            not applied (strict mode aborts before applying) is in
             :attr:`turns` and deliberately absent here.
         play_decisions: Applied PLAY decisions; setup does not count.
         failure: Human-readable detail for a non-finished status.
@@ -987,7 +987,7 @@ class MatchRunner:
         it was allowed to see.
 
         Both seed streams restart at the start of every match, so a match is
-        reproducible from this runner's configuration -- though the *timed*
+        reproducible from this runner's configuration, though the *timed*
         decisions are not, because scheduling decides how much an agent finishes.
 
         Args:
@@ -1000,7 +1000,7 @@ class MatchRunner:
         Raises:
             ValueError: If the deal itself cannot be created, for instance from
                 an out-of-range dealer. Nothing has been played at that point,
-                so it is reported to the caller rather than as a match result.
+                so it is reported to the caller, not as a match result.
         """
         self._decision_id = 0
         self._agent_seeds = random.Random(self._config.agent_seed)

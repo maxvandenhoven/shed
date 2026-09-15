@@ -3,10 +3,10 @@
 This module exports project metadata only; import the engine from
 :mod:`shed.engine` and the agents from :mod:`shed.agents`.
 
-The first release is complete. It ships the deterministic engine -- the
+The first release is complete. It ships the deterministic engine (the
 canonical deck, dealing, authoritative state, immutable player views, the event
 vocabulary with private-event filtering, legal-move generation, and atomic setup
-and play transitions with snapshot undo -- the agent layer on top of it, and the
+and play transitions with snapshot undo), the agent layer on top of it, and the
 timed match runner in :mod:`shed.match`, which owns clocks, worker processes,
 the selection policy, and the records a match leaves behind. On top of those,
 :mod:`shed.replay` writes and verifies versioned JSON replays and is the
@@ -17,9 +17,9 @@ from that stack: it measures the engine alone and deliberately imports neither
 the runner nor the agents, so no measurement can include worker startup.
 
 Importing this package is deliberately cheap. ``__version__`` is resolved on
-first access rather than at import time, because reading distribution metadata
-pulls in ``importlib.metadata`` and its dependencies -- measured at roughly 60 ms
-of the 115 ms it took to import :mod:`shed.match`. The match runner starts a
+first access, not at import time, because reading distribution metadata
+pulls in ``importlib.metadata`` and its dependencies (measured at roughly 60 ms
+of the 115 ms it took to import :mod:`shed.match`). The match runner starts a
 fresh interpreter per decision, so that import cost was being paid on every
 single timed decision to compute a string almost nothing reads. Only the replay
 writer needs the version, once per match.

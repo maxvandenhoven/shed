@@ -7,14 +7,14 @@ decoding.
 
 ``GameState`` is the entry point: create a game with :meth:`GameState.create`,
 then use ``get_legal_moves``, ``observe``, ``initial_events``, ``apply_move``,
-and ``undo_move`` on it. Modules depend one way -- ``types`` defines the value
+and ``undo_move`` on it. Modules depend one way: ``types`` defines the value
 types, ``events`` records what happened with them, and ``state`` builds the
-game on both -- and engine code imports from those modules directly rather than
-through this file.
+game on both. Engine code imports from those modules directly, not through this
+file.
 
 The deterministic engine is complete: the deck, dealing, setup, observations,
-legality, the full PLAY transition -- effects, burns, pickups, blind reveals,
-replenishment, and termination -- and snapshot undo for all of them. Timing,
+legality, the full PLAY transition (effects, burns, pickups, blind reveals,
+replenishment, and termination), and snapshot undo for all of them. Timing,
 processes, agents, replay, and the gauntlet are separate layers built on top and
 are not part of this package.
 """

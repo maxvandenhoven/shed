@@ -39,62 +39,63 @@ the runner's message handling, so the engine stays free of JSON and decoding.
 ## The `shed-v1` rules profile
 
 One fixed, versioned profile, for 2–5 players. `RulesConfig` records it and
-refuses a changed field or an unknown identifier rather than quietly claiming a
-game was played under `shed-v1`. The full contract is section 3 of
-[`docs/implementation.md`](docs/implementation.md); these are the choices a
-player or an agent author needs:
+refuses a changed field or an unknown identifier instead of quietly claiming a
+game was played under `shed-v1`. Section 3 of
+[`docs/implementation.md`](docs/implementation.md) contains the full contract.
+The choices a player or an agent author needs are listed below.
 
-- **The deck** is 52 ordinary cards plus two distinct jokers: 54 uniquely
-  identified physical cards. Ranks run 2 to ace, ace high. **Suits decide
-  nothing** — not legality, not strength — which is why a play names a rank and a
-  count rather than a set of cards, and why the engine picks the physical cards
-  by ascending identifier.
-- **Setup.** Three cards go face down, three face up, and three to the hand.
+- The deck holds 52 ordinary cards plus two distinct jokers (54 uniquely
+  identified physical cards). Ranks run 2 to ace, ace high. Suits do not affect
+  legality or strength, which is why a play names a rank and a count rather than
+  a set of cards. The engine picks physical cards by ascending identifier.
+- Setup. Three cards go face down, three face up, and three to the hand.
   Every player then privately picks which three of their six hand and face-up
-  cards end up face up; keeping the deal as dealt is legal. Submissions stay
+  cards end up face up. Keeping the deal as dealt is legal. Submissions stay
   private and are committed together, so nobody can react to a choice while
-  still making their own. The opener is then found by scanning ranks in the
-  order 3,4,5,6,7,8,9,10,J,Q,K,A,2,joker — specials last — and taking the first
-  rank anybody holds; ties among its holders break clockwise after the dealer.
+  still making their own. The opener is found by scanning ranks in the order
+  3,4,5,6,7,8,9,10,J,Q,K,A,2,joker, with specials last. The first rank held by
+  any player wins, and ties among its holders break clockwise after the dealer.
   The opening pile is unrestricted, so the opener need not lead that card.
-- **Zones, in order.** You play from your hand; when hand and deck are both
-  empty, from your face-up cards; and only then from your face-down slots, one
-  blind reveal at a time. A revealed card is tested against the constraint that
-  stood before the reveal: on a miss you take it and the pile, and a failed final
-  reveal does not win.
-- **A play** is one rank and a count from one zone, never a mix of hand and
-  table. The pile's constraint is what an ordinary rank must satisfy: nothing on
-  an empty pile, at least *r* after an ordinary *r*, at most seven after a seven.
-- **The exceptions.** A two is always legal and resets the requirement to "at
-  least two". A nine is always legal and leaves the constraint exactly as it
-  was — 7 then 9 still requires at most seven. A joker is always legal and clears
-  the constraint. A ten is always legal and burns the pile. Four of a rank played
-  **in one action** burns the pile, but only if that rank was legal to begin
-  with; four accumulating across separate turns does not burn.
-- **Blocked** means pickup, and pickup is never voluntary: when no batch is
-  playable, taking the pile is the only legal move.
-- **After a play** the hand refills to three while the deck lasts; drawing is
+- Zones follow a fixed order. Play comes from the hand first. Once both hand
+  and deck are empty, the active zone is the face-up collection. Once that is
+  gone, play comes from face-down slots, one blind reveal per decision. A
+  revealed card is tested against the constraint that stood before the reveal.
+  On a miss, the player takes the card and the pile, and a failed final reveal
+  does not win.
+- A play names one rank and a batch size from one zone. Hand and face-up cards
+  cannot be mixed in a single play. An ordinary rank must satisfy the pile's
+  constraint. On an empty pile the constraint is unrestricted. After an ordinary
+  rank *r* it is at least *r*. After a seven it is at most seven.
+- Special ranks. A two is always legal and resets the constraint to at least
+  two. A nine is always legal and leaves the constraint unchanged (so 7 then 9
+  still requires at most seven). A joker is always legal and clears the
+  constraint. A ten is always legal and burns the pile. Four cards of one rank
+  played in a single action also burn the pile, provided that rank was legal to
+  begin with. Four of a rank accumulated across separate turns does not burn.
+- When no batch is playable, taking the pile is the only legal move. Voluntary
+  pickup does not exist in this profile.
+- After a play, the hand refills to three while the deck lasts. Drawing is
   automatic and never a decision. A burn gives the same player another decision
-  with a fresh budget; anything else passes to the next seat.
-- **Winning** is checked after the refill: the first player with no cards
-  anywhere wins and the game ends. A final burn wins rather than earning an extra
-  turn. There are no eliminations, no last-player-loses rule, no passing, and no
-  off-turn responses.
+  with a fresh budget. Anything else passes to the next seat.
+- Win is checked after the refill. The first player with no cards anywhere wins
+  and the game ends. A final burn wins without earning an extra turn. There
+  are no eliminations, no last-player-loses rule, no passing, and no off-turn
+  responses.
 
 ## The engine
 
 `GameState.apply_move()` is atomic. It validates the move against the position
-as it is now, snapshots the state, and resolves the whole chain — transfer or
+as it is now, snapshots the state, and resolves the whole chain (transfer or
 reveal, burn or rank effect, pickup, replenishment, termination, and the next
-actor — before returning. An illegal move mutates nothing, and any failure
+actor) before returning. An illegal move mutates nothing, and any failure
 inside that boundary, the closing invariant check included, rolls the snapshot
 back. `undo_move()` restores fields on the existing object, LIFO.
 
-Timing and processes are deliberately outside the engine and outside agents:
-they live in `shed.match`, so the engine never learns that a decision was timed
-and an agent never learns that it runs in a worker.
+Timing and process management live in `shed.match`, separate from the engine
+and agent layers. The engine never learns that a decision was timed, and an
+agent never learns that it runs in a worker.
 
-`GameState` is the entry point — it carries its own `RulesConfig`, so there is
+`GameState` is the entry point. It carries its own `RulesConfig`, so there is
 no separate rules object:
 
 ```python
@@ -123,9 +124,9 @@ state.is_finished, state.outcome  # False, None until somebody sheds everything
 
 ## Agents
 
-An agent sees one observation and a turn-scoped submission channel, and
-nothing else. It reads its options from `view.legal_moves` — the engine is the
-only legality authority — and closes the decision with a final submission:
+An agent sees one observation and a turn-scoped submission channel. It reads
+its options from `view.legal_moves` (the engine is the only legality authority)
+and closes the decision with a final submission:
 
 ```python
 from shed.agents import AgentSpec, build_agent
@@ -141,42 +142,41 @@ agent = build_agent(AgentSpec(kind="greedy", name="greedy-1"), seed=7)
 agent.think(view, turn)
 ```
 
-Agents are built fresh for every decision from a serializable `AgentSpec` and an
-explicit seed, so no live object and no generator state is ever reused: a spec
+Agents are built fresh for every decision from a serializable `AgentSpec` and
+an explicit seed. No live object or generator state is ever reused. A spec
 carries a kind and a label, never a deck or fallback seed. `RandomAgent` samples
-the legal rank/count actions uniformly. `GreedyAgent` keeps the cards that are
-hardest to shed — sevens, nines, twos, jokers, and tens score above every
-ordinary rank — sheds the largest batch it can, spends the cheapest cards among
-equally sized plays, and settles genuine ties with its seeded generator.
+legal rank/count actions uniformly. `GreedyAgent` keeps the hardest-to-shed
+cards last (sevens, nines, twos, jokers, and tens score above every ordinary
+rank), sheds the largest batch it can, spends the cheapest cards among equally
+sized plays, and settles genuine ties with its seeded generator.
 
 ### What an agent may see, and what it may keep
 
 A `PlayerView` is the whole of an agent's input. It carries the public rules
-profile, the public position — seats, dealer, phase, actor, ply, the discard
-pile in order, the burned cards, the constraint, the outcome once there is one,
-and every seat's face-up cards, hand *count*, and face-down slot identifiers —
-plus the viewer's own hand, the
-viewer's filtered history, and, for the acting seat only, that decision's legal
-moves. Every collection in it is a tuple of frozen values, and none of them
-aliases anything inside `GameState`.
+profile, the full public position (seats, dealer, phase, actor, ply, the
+discard pile in order, the burned cards, the constraint, the outcome once there
+is one, and every seat's face-up cards, hand count, and face-down slot
+identifiers), plus the viewer's own hand, the viewer's filtered history, and,
+for the acting seat only, the legal moves for that decision. Every collection
+in it is a tuple of frozen values, and none of them aliases anything inside
+`GameState`.
 
 It never contains another seat's hand, any face-down identity, the deck order,
 the draw pile's contents, the shuffle seed, any RNG state, another player's
 pending setup submission, or the replay being recorded. History preserves what
-was once visible — a card seen face up before the arrangements is still in the
-record after it moves — and a private event reaches everyone but its recipient
+was once visible (a card seen face up before the arrangements is still in the
+record after it moves), and a private event reaches everyone but its recipient
 as a count with `cards=None`. Swapping two face-down cards between seats cannot
-change what any viewer observes or what moves they are offered; the engine tests
+change what any viewer observes or what moves they are offered. The engine tests
 assert exactly that.
 
-**There is no agent memory between decisions.** A worker is created for one
-decision, builds the agent, and exits; nothing an agent stores on `self`
-survives, and nothing it writes reaches the parent. That is deliberate — it is
-what keeps a fresh seed per decision from being undone by a reused generator —
-and the filtered history in each view is how an agent reconstructs what it knew.
-Persistent search state would need one persistent worker per seat and an
-explicit recovery story, which is future work rather than a thing that happens
-to work today.
+There is no agent memory between decisions. A worker is created for one
+decision, builds the agent, and exits. Nothing an agent stores on `self`
+survives, and nothing it writes reaches the parent. This keeps a fresh
+per-decision seed from being undone by a reused generator. The filtered history
+in each view is how an agent reconstructs what it knew. Persistent search state
+would need one persistent worker per seat and an explicit recovery story, and is
+deferred to future work.
 
 ## Timed matches
 
@@ -203,34 +203,32 @@ result.turns[0].reason  # why that decision closed: final, returned, deadline, f
 result.decisions[-1].events  # the full events the last applied decision resolved into
 ```
 
-An agent may submit as often as it likes; the runner keeps the latest legal
+An agent may submit as often as it likes. The runner keeps the latest legal
 candidate, closes early on a legal final one, and otherwise closes at the
 deadline. A decision that reaches the deadline holding a legal candidate is an
 ordinary decision, not a failure. Only a decision that accepts nothing at all
-uses the seeded legal fallback, and rejected submissions, worker crashes, and
-fallbacks are all counted in the turn record — `MatchConfig(strict_failures=True)`
+uses the seeded legal fallback. Rejected submissions, worker crashes, and
+fallbacks are all counted in the turn record. `MatchConfig(strict_failures=True)`
 aborts the match on any of them instead of playing on.
 
-The budget is an *acceptance* deadline: worker startup counts against it, and
+The budget is an acceptance deadline. Worker startup counts against it, and
 scheduling and reaping add latency after it, so `choose_move()` does not return
-at exactly that instant. The parent enforces the deadline itself — it
-terminates, then kills, and always reaps the worker — because polling inside an
-agent cannot interrupt an infinite loop. A worker receives only its
-specification, a fresh seed, one observation, and its deadline. The supported
-threat model is trusted local agents sending small, well-formed messages:
-submissions are validated and illegal ones rejected, but this is not a sandbox
-for hostile code.
+at exactly that instant. The parent enforces the deadline itself (terminating,
+then killing, and always reaping the worker), because polling inside an agent
+cannot interrupt an infinite loop. A worker receives only its specification, a
+fresh seed, one observation, and its deadline. The threat model is trusted local
+agents sending small, well-formed messages. Submissions are validated and illegal
+ones rejected, but this is not a sandbox for hostile code.
 
 No worker is ever forked from the runner, because that would hand it a copy of
-the parent's memory, where the authoritative state lives. Workers come from a
+the parent's memory where the authoritative state lives. Workers come from a
 `forkserver` where the platform has one, and from `spawn` otherwise. The
-forkserver keeps the same boundary — its server process is created by fork *and
-immediate exec* of a fresh interpreter, so it holds none of the runner's
-objects, and workers fork from that server rather than from the runner — while
-cutting worker startup from about 120 ms to about 14 ms, because the server has
-`shed.match` already imported. A test asserts the boundary directly: a value the
-parent assigns after import is visible to a plain `fork` child and invisible to a
-real worker.
+forkserver keeps the same boundary. Its server process is created by fork and
+immediate exec of a fresh interpreter, so it holds none of the runner's objects.
+Workers fork from that server instead of from the runner, cutting startup from
+about 120 ms to about 14 ms because the server already has `shed.match` imported.
+A test asserts the boundary directly. A value the parent assigns after import is
+visible to a plain `fork` child but invisible to a real worker.
 
 ## Replays
 
@@ -250,47 +248,47 @@ check = verify_replay(replay)
 check.ok, check.applied, check.outcome  # True, 58, Outcome(winner=1)
 ```
 
-Encoding and decoding are deliberately asymmetric. Encoding takes typed records
-and writes explicit tags — a move is `{"type": "play", "source": "hand",
-"rank": 7, "count": 2}`, never a pickled object. Decoding takes a document that
-merely *claims* to be a replay, and settles every external question before a
-domain object exists: the schema and rules profile it targets, the shape of each
+Encoding and decoding are asymmetric. Encoding takes typed records and writes
+explicit tags (a move is `{"type": "play", "source": "hand", "rank": 7,
+"count": 2}`, not a pickled object). Decoding takes a document that merely
+claims to be a replay and settles every external question before a domain object
+exists. It checks the schema and rules profile it targets, the shape of each
 record, the tag of each union, and the primitive type of each field. A JSON
 boolean is not an integer here, even though Python says it is, so `"count": true`
-is refused rather than played as a one. The engine's constructors then take real
+is refused, not played as a one. The engine's constructors then take real
 `Rank`, `Suit`, and identifier values and check only their own invariants.
 
-Verification replays the recording: it deals the recorded deck order with the
-same pure helper the runner deals with, applies each recorded move through
+Verification replays the recording. It deals the recorded deck order with the
+same pure helper the runner uses, applies each recorded move through
 `GameState.apply_move()`, and compares the resolved events, the outcome, and a
 digest of the final position. No agent is built and no worker is started, so a
-replay is deterministic even though the timed match that produced it was not —
-and the original budgets are irrelevant to it. A move the engine now refuses, a
+replay is deterministic even though the timed match that produced it was not.
+The original budgets are irrelevant to it. A move the engine now refuses, a
 tampered event stream, or a position that does not match come back as reported
-problems, not as an exception. Truncated and aborted matches replay too: a
+problems, not as an exception. Truncated and aborted matches replay too. A
 selection that was chosen but never applied stays out of the applied stream, so
 a replay can never play a move the match did not.
 
-What a replay reproduces is the *recording*, and only that. Rerunning the same
-match from the same seeds is not expected to produce the same game: the agents
-think against a wall clock, so how many improvements a decision finishes depends
-on the machine's scheduling and on how long a spawn took, and a different
-candidate can be the latest one when the deadline arrives. The recorded-move
-replay is deterministic regardless, which is the property the format is for.
-Timings are recorded as diagnostics and are never compared during verification.
-For a test that needs bit-for-bit repeatability of the *decisions* as well, drive
-the baselines synchronously with a fake turn context, which removes the clock
-from the loop entirely.
+What a replay reproduces is the recording. Rerunning the same match from the
+same seeds is not expected to produce the same game. The agents think against a
+wall clock, so how many improvements a decision finishes depends on scheduling
+and spawn time, and a different candidate can be the latest one when the
+deadline arrives. The recorded-move replay is deterministic regardless, which is
+the property the format is for. Timings are recorded as diagnostics and are
+never compared during verification. For a test that needs bit-for-bit
+repeatability of the decisions as well, drive the baselines synchronously with
+a fake turn context, which removes the clock from the loop entirely.
 
-A complete replay file holds hidden information — every face-down identity, the
-deck order, and each private draw — and is a trusted post-match artifact. The
-console output is the opposite: `describe_event` reports private events by their
-public count, so summarizing a replay never dumps what the players could not see.
+A complete replay file holds hidden information (every face-down identity, the
+deck order, and each private draw) and is a trusted post-match artifact.
+Console output provides no hidden information. `describe_event` reports private
+events by their public count, so summarizing a replay never exposes what the
+players could not see.
 
 ## The gauntlet
 
 `shed.gauntlet` compares agents by playing many of those matches. It schedules,
-seeds, and counts; every authoritative state still lives inside a `MatchRunner`,
+seeds, and counts. Every authoritative state still lives inside a `MatchRunner`,
 and no rule is reimplemented there:
 
 ```python
@@ -306,30 +304,30 @@ run.report.status.finished  # 20 — truncated and failed matches are counted ap
 run.report.agents[1].wins  # Rate(count=16, total=20): a count never travels without its denominator
 ```
 
-Each deal in the bank is played once per **cyclic seat rotation**, so a lineup of
-two agents and 10 deals is 20 matches: the same deck and the same dealer, with
-the participants shifted one seat. That gives every participant every seat on
-every deal, which is what makes the seat breakdown a fair comparison. It is not
-every seating permutation for three or more agents — the participants keep their
-cyclic order relative to each other — so it controls for seat advantage, not for
-who sits to whose left. Permutation schedules are future work.
+Each deal in the bank is played once per cyclic seat rotation. A lineup of two
+agents and 10 deals is 20 matches, all sharing the same deck and dealer but with
+participants shifted one seat. That gives every participant every seat on every
+deal, which is what makes the seat breakdown a fair comparison. For three or more
+agents, this is not every seating permutation. Participants keep their cyclic
+order relative to each other, so the schedule controls for seat advantage but
+not for who sits to whose left. Permutation schedules are future work.
 
 Matches are played one at a time. The budget an agent is given is wall time, so
-two matches thinking at once would measure the machine's load rather than the
+two matches thinking at once would measure the machine's load, not the
 strategies.
 
-Seeds come from `derive_seed`, a SHA-256 over a canonical JSON payload — not
-Python's `hash()`, which is randomized per interpreter, so a schedule reproduces
-in a fresh process. The deck, agent, and fallback streams are derived under
-separate purposes: rotations of one deal share the deck seed and nothing else,
-and no agent's seed is a function of the deal it is playing.
+Seeds come from `derive_seed`, a SHA-256 over a canonical JSON payload, not
+Python's `hash()`, which is randomized per interpreter. A schedule therefore
+reproduces in a fresh process. The deck, agent, and fallback streams are derived
+under separate purposes. Rotations of one deal share the deck seed and nothing
+else, and no agent's seed is a function of the deal it is playing.
 
-Accounting is deliberately unforgiving. Finished, truncated, agent-failed, and
-engine-failed matches are counted separately and must add up to the number
-scheduled, or `summarize` refuses the run. Win rates are measured over finished
-matches only, so a truncated match is never quietly a loss, and every rate
-carries the denominator it came from — including `0/0`, which reports as `n/a`
-rather than as a zero win rate.
+Accounting is unforgiving. Finished, truncated, agent-failed, and engine-failed
+matches are counted separately and must add up to the number scheduled, or
+`summarize` refuses the run. Win rates are measured over finished matches only,
+so a truncated match is never quietly a loss. Every rate carries the denominator
+it came from, including `0/0`, which reports as `n/a` instead of a zero win
+rate.
 
 ## Requirements
 
@@ -362,7 +360,7 @@ uv run --isolated --no-project --python 3.12 \
 whatever interpreter it finds first.
 
 Every command below is written for a checkout, because the scripts under
-`scripts/` are part of the repository rather than console entry points.
+`scripts/` are part of the repository, not console entry points.
 
 ## Development
 
@@ -439,26 +437,26 @@ position: play | ply 10 | to act: player 0 | constraint: at least 5
   player 1: hand 2 J A | face up 8 10 K | face down 0=3 1=3 2=6
 ```
 
-That is the view for reading back *why* an agent played what it did. It is
-orthogonal to `--quiet`: together they print the position and the summary and no
+That is the view for reading back why an agent played what it did. It is
+orthogonal to `--quiet`. Together they print the position and the summary with no
 action log. It is also purely a console setting. Events always carry their
-identities — a runner records them and a replay file stores them — so the public
+identities (a runner records them and a replay file stores them), so the public
 view is redaction applied on the way to the terminal, and `--omniscient` simply
-declines to apply it. Nothing about what an agent is *given* changes: a strategy
+declines to apply it. Nothing about what an agent is given changes. A strategy
 sees a `PlayerView`, which never contains another seat's cards whatever the
 operator asked to print.
 
 Cards are spelled by rank alone, because a suit decides nothing in `shed-v1` and
 `J J 7` reads better than `Jc Jd 7h`. Both commands take `--show-suit` when you
-do want them — tracking one physical card through a pickup, say. The suits are
-in the replay file either way; this only changes the spelling on your terminal.
+want them (for tracking one physical card through a pickup, say). The suits are
+in the replay file either way. This only changes the spelling on your terminal.
 
-Every group of cards is printed in reading order — by rank, with the card
+Every group of cards is printed in reading order (by rank, with the card
 identifier breaking ties so it stays deterministic and keeps one rank's suits
-together. The two exceptions are the discard and draw piles, which are printed
+together). The two exceptions are the discard and draw piles, which are printed
 exactly as stored, because position decides what happens next in both. Sorting
-is presentation only: the engine's orders are untouched and a replay still
-compares them exactly, so a wrong one cannot hide behind a tidy console.
+is presentation only. The engine's orders are untouched and a replay still
+compares them exactly, so a wrong order cannot hide behind a tidy console.
 
 ### Running a gauntlet
 
@@ -472,8 +470,8 @@ The lineup holds two to five agents and repeated kinds get distinct labels, so
 runner's configuration, and `--quiet` silences the per-match progress, which
 otherwise goes to standard error while the table goes to standard output. The
 command exits `2` on arguments that describe no runnable gauntlet and `1` when a
-match aborted or the report could not be written; a truncated match is a limit
-being reached, not a failure.
+match aborted or the report could not be written. A truncated match signals a
+limit being reached, not a failure.
 
 ```
 $ uv run scripts/gauntlet.py --agents random greedy --deals 10 --seed 42 --seconds-per-turn 0.5 --quiet
@@ -501,8 +499,8 @@ Those numbers are one 20-match run against a random baseline, not a benchmark of
 the heuristic. Rotations share deals, so results across them are correlated;
 treating each rotation as an independent sample would understate the uncertainty.
 
-`--output` writes the same numbers as JSON, and embeds each match's full replay
-document — the format `play.py` writes, not a second, weaker one — so a finished
+`--output` writes the same numbers as JSON and embeds each match's full replay
+document (the format `play.py` writes, not a second, weaker one), so a finished
 match from a gauntlet file verifies exactly like a saved single match:
 
 ```python
@@ -529,7 +527,7 @@ uv run scripts/benchmark.py --transitions 500 --playouts 50 --output results/ben
 ```
 
 The benchmark measures the engine and nothing else. `shed.benchmark` does not
-import `shed.match` — a test asserts that by reading its imports — so no worker
+import `shed.match` (a test asserts this by reading its imports), so no worker
 startup, no transport, and no timed wait can end up inside a reported number.
 Four costs are reported separately, because they are charged separately:
 
@@ -537,20 +535,20 @@ Four costs are reported separately, because they are charged separately:
 | --- | --- | --- |
 | legal moves | `state.get_legal_moves()` | No view is built, so this is grouping and rank comparison alone |
 | transitions | `state.apply_move()` then `state.undo_move()` | The pair a search spends; both ends copy the whole position |
-| observations | `state.observe()` | **Includes** generating the acting seat's legal moves |
+| observations | `state.observe()` | Includes generating the acting seat's legal moves |
 | playouts | one complete random game, and one decision of one | Engine-only throughput: deal, legality, apply |
 
-The observation rows are printed under the legality rows deliberately.
-`observe()` fills `PlayerView.legal_moves` for the acting seat on every call, so
-an observation is a legal-move generation plus a snapshot of the public
-position, and the two tables together show how much of it is which. History is
-passed in already filtered and stored by reference, so its length does not drive
-that cost; filtering it is the runner's work, not the engine's.
+The observation rows are printed under the legality rows. `observe()` fills
+`PlayerView.legal_moves` for the acting seat on every call, so an observation is
+a legal-move generation plus a snapshot of the public position. The two tables
+together show how much of the cost is which. History is passed in already
+filtered and stored by reference, so its length does not drive that cost.
+Filtering it is the runner's work, not the engine's.
 
-Fixtures are discovered, not hand-written: seeded games are played and the first
-position of each shape is copied out — the opening arrangement, the first play, a
+Fixtures are discovered, not hand-written. Seeded games are played and the first
+position of each shape is copied out (the opening arrangement, the first play, a
 hand grown past the refill target by a pickup, a forced pickup, a burn, the
-face-up collection, and a blind reveal. The same `--seed` finds the same
+face-up collection, and a blind reveal). The same `--seed` finds the same
 positions, and their sizes are printed before any duration, because a timing
 without the position it was measured on says nothing.
 
@@ -595,22 +593,20 @@ pairs, `--playouts` the complete games, and `--repeats` how many times each runs
 `--players` and `--seed` choose the games. `--output` writes the same report as
 JSON, with the raw per-repeat totals alongside the derived figures.
 
-Every printed duration is the *fastest* repeat, which is the one least
-contaminated by scheduling noise, and the `spread` column is the slowest divided
-by the fastest, so a busy machine is visible rather than averaged away. These
-numbers describe one machine and one interpreter. Nothing here is a threshold:
-no test asserts a duration, and none of it is a measured comparison with any
-other engine — including Hive, which this project takes its structure from but
-has never been benchmarked against.
+Every printed duration is the fastest repeat, which is the one least
+contaminated by scheduling noise. The `spread` column is the slowest divided by
+the fastest, so a busy machine is visible in the data. These numbers describe one
+machine and one interpreter. No test asserts a duration, and these results are
+not a comparison with any other engine, including Hive, which this project takes
+its structural inspiration from but has not been benchmarked against.
 
-What that run shows is worth knowing before optimizing anything: **snapshot undo
-dominates**, by about two orders of magnitude. Generating legal moves costs 2–26
-µs depending on the position, building an observation 11–35 µs, and an apply/undo
-pair about 1 ms — almost all of it the two deep copies that make undo work, since
-a bare apply during a playout costs about half of it. The specification predicted
-exactly that ("full-state snapshot undo … may dominate otherwise cheap
-operations. Benchmark before replacing them"), and it is where a future search
-should look first. Those figures are from one machine; run it on yours.
+Snapshot undo dominates by about two orders of magnitude. Generating legal moves
+costs 2–26 µs depending on the position, building an observation 11–35 µs, and
+an apply/undo pair about 1 ms (almost all from the two deep copies that make undo
+work, since a bare apply during a playout costs about half of that). The
+specification anticipated this pattern ("full-state snapshot undo … may dominate
+otherwise cheap operations. Benchmark before replacing them"), and it is where a
+future search should look first. Those figures are from one machine.
 
 ## Contributing
 
@@ -637,7 +633,7 @@ is the actual requirement. Do not blanket-disable the checks, and do not silence
 a type error or a missing implementation with `noqa` or an ignore comment.
 
 The suite takes about a minute: most of it is the process tests, which start
-real workers and wait on real deadlines rather than faking either. The selection
+real workers and wait on real deadlines instead of faking either. The selection
 policy is also tested against a fake clock and a fake transport, so a change to
 it can be checked in milliseconds before the slow tests confirm it end to end.
 Nothing asserts a duration — not in the runner tests and not in the benchmark

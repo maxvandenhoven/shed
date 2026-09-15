@@ -1,6 +1,6 @@
 # Shed: implementation specification
 
-Status: implemented. This document is the normative contract for the first release, and the code in this repository satisfies it; sections amended during implementation say so where they supersede an earlier sketch.  
+Status: implemented. This document is the normative contract for the first release, and the code in this repository satisfies it. Sections amended during implementation say so where they supersede an earlier sketch.  
 Specification date: 2026-09-08.  
 Rules profile: `shed-v1`. Replay schema: `1`.
 
@@ -10,7 +10,7 @@ Build a small Python project for **Shed**, a hidden-information card game. It mu
 
 This document consolidates the conversation into one consistent implementation contract. Where earlier sketches differed, this document selects a default explicitly. Use `shed` in package names, commands, documentation, and result files. The original Dutch game name appears only in source links.
 
-The architectural inspiration is the [Hive repository](https://github.com/maxvandenhoven/hive), especially its engine and agents packages. The earlier discussion described an inspected revision `93204fd`; that inspection is supplied conversation context, not a fresh repository audit for this document. Reuse its separation of state, rules, and strategies. Do not depend on Hive, copy its two-player assumptions, or build a framework supporting both games.
+The architectural inspiration is the [Hive repository](https://github.com/maxvandenhoven/hive), especially its engine and agents packages. The earlier discussion described an inspected revision `93204fd`. That inspection is supplied conversation context, not a fresh repository audit for this document. Reuse its separation of state, rules, and strategies. Do not depend on Hive, copy its two-player assumptions, or build a framework supporting both games.
 
 ### Required first release
 
@@ -41,9 +41,9 @@ Monte Carlo search, belief sampling, persistent workers, parallel gauntlets, con
 
 Flow: gauntlet schedules a match → runner builds a player view → agent submits candidates → runner selects one → engine resolves it → repeat → gauntlet records results.
 
-Dependencies point inward: engine depends only on the standard library; agents depend on engine types; match runner depends on both; gauntlet depends on match runner. Engine code never imports agents, timing, scripts, or multiprocessing.
+Dependencies point inward. The engine depends only on the standard library. Agents depend on engine types. The match runner depends on both. The gauntlet depends on the match runner. Engine code never imports agents, timing, scripts, or multiprocessing.
 
-Inside the engine the direction is `types` → `events` → `state`: `types.py` defines the value types, moves, configuration, and errors; `events.py` records what happened using them; `state.py` builds state, observations, and the game operations on both. Engine modules import from the defining module, not from the re-exporting `shed/engine/__init__.py`. There is no separate rules object: `GameState` already carries its `RulesConfig`, so a second instance holding the same fixed profile would only add ceremony.
+Inside the engine the direction is `types` → `events` → `state`. `types.py` defines the value types, moves, configuration, and errors. `events.py` records what happened using them. `state.py` builds state, observations, and the game operations on both. Engine modules import from the defining module, not from the re-exporting `shed/engine/__init__.py`. There is no separate rules object. `GameState` already carries its `RulesConfig`, so a second instance holding the same fixed profile would only add ceremony.
 
 ## 3. Rules and selected interpretation
 
@@ -51,21 +51,21 @@ Inside the engine the direction is `types` → `events` → `state`: `types.py` 
 
 The source variant describes 2–5 players aiming to shed all cards first. Each starts with three cards in hand and three each face-up and face-down, with initial hand/table swaps. Players use equal-or-higher ranks, may play matching-rank batches, replenish their hands, and pick up when blocked. Special cards include always-playable twos, transparent nines, jokers, sevens imposing a lower-rank restriction, and tens clearing the pile. Playing four equal cards together also clears it. See the [original rules article](https://favorietespel.nl/zweeds-pesten-regels/).
 
-The remaining rules below are **the project's normative implementation contract**, consolidating the supplied conversation and resolving ambiguities. They are not a claim that every detail is specified by the article. Version the profile whenever observable game semantics change.
+The remaining rules below are the project's normative implementation contract, consolidating the supplied conversation and resolving ambiguities. They are not a claim that every detail is specified by the article. Version the profile whenever observable game semantics change.
 
 ### 3.2 Deck and setup
 
 1. Use 52 ordinary cards and two distinct jokers: 54 uniquely identified physical cards.
 2. Ordinary ranks are 2 through ace, with ace high. Suits do not affect strategy or legality.
-3. Use ordered seats `0..player_count-1`. Default dealer is seat `0`; support an explicit valid dealer argument.
-4. Build the unshuffled deck deterministically: suits clubs, diamonds, hearts, spades; ranks ascending 2..ace within each suit; then two jokers. Assign IDs `0..53` before shuffling.
+3. Use ordered seats `0..player_count-1`. Default dealer is seat `0`. Support an explicit valid dealer argument.
+4. Build the unshuffled deck deterministically: suits clubs, diamonds, hearts, spades, with ranks ascending 2..ace within each suit, then two jokers. Assign IDs `0..53` before shuffling.
 5. Shuffle once with a dedicated `random.Random(seed)`. The end of the deck list is the next card to draw.
 6. Deal clockwise beginning after the dealer: three rounds to face-down slots `0,1,2`, then three rounds face-up, then three rounds to hands. Each round gives one card to each seat.
 7. Keep all remaining cards as the draw pile. Start with an empty discard pile, empty burned collection, and unrestricted constraint.
 8. Every player privately chooses exactly three physical cards from their six hand/face-up cards to become their final face-up cards. The remaining three become their hand. Keeping the original arrangement is legal.
 9. Request arrangements in clockwise order after the dealer. Store submissions privately without applying them. Commit all arrangements together only after everyone has chosen.
 10. Select the opening player from post-arrangement hands. Search ranks in this order: 3,4,5,6,7,8,9,10,J,Q,K,A,2,joker. For the first rank present, break player ties clockwise after the dealer.
-11. Do not force a particular opening card; the opening pile is unrestricted.
+11. Do not force a particular opening card. The opening pile is unrestricted.
 
 Face-down card identities are unknown even to their owner. Face-down slot IDs remain stable when other slots are removed. Face-up cards are a collection: they do not block the specific face-down slot underneath them.
 
@@ -96,25 +96,25 @@ For face-down play, every remaining slot is legal to select. Reveal one card, th
 | Joker | Always legal | Reset to `Unrestricted()` |
 | Four-card batch of one rank | Must first satisfy that rank's legality | Burn entire pile, including played cards |
 
-`Unrestricted` accepts any ordinary rank. `AtLeast(r)` accepts ranks greater than or equal to `r`. `AtMost(r)` accepts ranks less than or equal to `r`. Apply the always-playable exceptions before ordinary comparisons; a joker's enum value must never determine its game strength.
+`Unrestricted` accepts any ordinary rank. `AtLeast(r)` accepts ranks greater than or equal to `r`. `AtMost(r)` accepts ranks less than or equal to `r`. Apply the always-playable exceptions before ordinary comparisons. A joker's enum value must never determine its game strength.
 
-The seven restriction is represented by the current constraint, not a countdown of players. A nine preserves it. An ordinary successful play replaces it. Examples: 7 → 9 still requires at most 7; 7 → 5 leaves at least 5; 7 → 2 leaves at least 2.
+The seven restriction is represented by the current constraint, not a countdown of players. A nine preserves it. An ordinary successful play replaces it. Examples: 7 → 9 still requires at most 7. 7 → 5 leaves at least 5. 7 → 2 leaves at least 2.
 
-Only a batch of four played in a **single action** triggers the four-card burn. Do not burn because four equal ranks have accumulated across separate actions. A ten's burn takes precedence when selecting the recorded burn reason.
+Only a batch of four played in a single action triggers the four-card burn. Do not burn because four equal ranks have accumulated across separate actions. A ten's burn takes precedence when selecting the recorded burn reason.
 
 ### 3.5 Resolution, replenishment, and termination
 
-After successful play, resolve burn or constraint changes, then replenish the actor's hand to three while the deck has cards. Drawing is automatic and is not an agent decision. Pickup and failed reveal also finish with the same refill helper; it never removes cards when a hand already has at least three.
+After successful play, resolve burn or constraint changes, then replenish the actor's hand to three while the deck has cards. Drawing is automatic and is not an agent decision. Pickup and failed reveal also finish with the same refill helper. It never removes cards when a hand already has at least three.
 
 A burn moves the entire discard pile to burned cards, clears the constraint, and grants the same actor a new decision with a fresh time budget. Otherwise advance one seat clockwise.
 
-Check whether the actor has zero cards across all personal zones **after replenishment**, before scheduling another actor. The first such player wins and the game ends immediately. A successful final burn wins rather than granting an extra turn. There are no eliminations, last-player-loses rules, passes, jokers skipping players, or chained off-turn responses in this profile.
+Check whether the actor has zero cards across all personal zones after replenishment, before scheduling another actor. The first such player wins and the game ends immediately. A successful final burn wins. No extra turn is granted. There are no eliminations, last-player-loses rules, passes, jokers skipping players, or chained off-turn responses in this profile.
 
-For evaluating potentially cyclic play, the runner imposes an action limit; reaching it is a truncation, not a rules-level draw or win.
+For evaluating potentially cyclic play, the runner imposes an action limit. Reaching it is a truncation, not a rules-level draw or win.
 
 ## 4. Simple repository structure
 
-Use a normal `src` layout with one namespace package root, `shed`. Avoid separate distributions or a monorepo. The table is the intended file layout; add a file only when it has actual responsibilities.
+Use a normal `src` layout with one namespace package root, `shed`. Avoid separate distributions or a monorepo. The table is the intended file layout. Add a file only when it has actual responsibilities.
 
 | Path | Responsibility |
 | --- | --- |
@@ -153,11 +153,11 @@ Use a normal `src` layout with one namespace package root, `shed`. Avoid separat
 | `tests/conftest.py` | Small deterministic fixtures |
 | `results/` | Generated local outputs, ignored by Git |
 
-Imports use `from shed.engine import ...`, never `from src...`. Scripts are thin argument parsers; reusable logic lives under `src/shed`. Keep multiprocessing entry points at module scope and script startup behind `if __name__ == "__main__":`.
+Imports use `from shed.engine import ...`, never `from src...`. Scripts are thin argument parsers. Reusable logic lives under `src/shed`. Keep multiprocessing entry points at module scope and script startup behind `if __name__ == "__main__":`.
 
-**Final dependency direction.** Every import runs one way and there is no cycle, so nothing is broken by a function-local import: `engine.types` → `engine.events` → `engine.state`; `agents.base` → `agents.random`/`agents.greedy` → `agents.factory`; then `match` → `replay` → `gauntlet`, each depending on the layers before it, with `cli` last, above all of them. `benchmark` sits outside that stack and depends on the engine alone: it deliberately does not import `match`, so no measurement can include worker startup, and `cli` imports it only to render its report. The two function-local imports in shipped code are both deliberate and neither breaks a cycle: `shed/__init__.py` defers `importlib.metadata` so importing the package stays cheap in a per-decision worker, and `engine/events.py` imports `GameState` only under `TYPE_CHECKING`.
+Final dependency direction: every import runs one way and there is no cycle, so nothing is broken by a function-local import. The chain is `engine.types` → `engine.events` → `engine.state`, then `agents.base` → `agents.random`/`agents.greedy` → `agents.factory`, then `match` → `replay` → `gauntlet`, each depending on the layers before it, with `cli` last, above all of them. `benchmark` sits outside that stack and depends on the engine alone. It deliberately does not import `match`, so no measurement can include worker startup, and `cli` imports it only to render its report. The two function-local imports in shipped code are both deliberate and neither breaks a cycle. `shed/__init__.py` defers `importlib.metadata` so importing the package stays cheap in a per-decision worker, and `engine/events.py` imports `GameState` only under `TYPE_CHECKING`.
 
-**`engine/rules.py` is not part of this layout.** The earlier sketch put a `Ruleset` class and a `legal_moves(view)` function there. With the operations on `GameState`, which already carries its `RulesConfig`, that module would hold nothing: legality reads the state directly and lives beside the state it reads, and the rank predicate, constraint transition, and burn rule are small cohesive helpers in `state.py` rather than a second module importing it back. `cli.py` is the one cohesive helper module the layout gained instead, and it is presentation, not rules.
+`engine/rules.py` is not part of this layout. The earlier sketch put a `Ruleset` class and a `legal_moves(view)` function there. With the operations on `GameState`, which already carries its `RulesConfig`, that module would hold nothing. Legality reads the state directly and lives beside the state it reads, and the rank predicate, constraint transition, and burn rule are small cohesive helpers in `state.py`. `cli.py` is the one cohesive helper module the layout gained instead, and it is presentation, not rules.
 
 ## 5. Supporting types
 
@@ -273,13 +273,13 @@ class RulesConfig:
 
 Validate card/joker suit consistency: jokers have no suit, ordinary cards have a suit. `Play` accepts only hand or face-up sources and positive counts. `Arrange` requires three distinct non-negative IDs and normalizes their order ascending. Legality then checks ownership and availability.
 
-**Strict domain types.** Engine constructors take correctly typed domain objects and assume their annotations hold: `Play` takes a `Rank`, never an integer it converts into one. `__post_init__` checks domain invariants only — non-negative identifiers and slots, positive play counts, playable sources, distinct arrangement IDs, joker/suit consistency, supported profiles — and never coerces or runtime-type-checks its inputs. `ty` enforces the annotations for engine callers, and a decoding failure is a decoder bug rather than something every constructor re-checks.
+Strict domain types: engine constructors take correctly typed domain objects and assume their annotations hold. `Play` takes a `Rank`, never an integer it converts into one. `__post_init__` checks domain invariants only (non-negative identifiers and slots, positive play counts, playable sources, distinct arrangement IDs, joker/suit consistency, supported profiles) and never coerces or runtime-type-checks its inputs. `ty` enforces the annotations for engine callers. A decoding failure is a decoder bug, not something every constructor re-checks.
 
-Serialization and deserialization belong entirely outside the engine, in the replay and transport layers. Those layers validate untyped external data — decoded JSON, agent messages — where it enters the process and construct domain objects before calling the engine; the engine itself stays free of JSON, transport, and replay decoding. This deliberately supersedes the earlier requirement that constructors coerce decoded representations and reject booleans masquerading as integers: those checks are the decoder's, and their tests belong to the decoder.
+Serialization and deserialization belong entirely outside the engine, in the replay and transport layers. Those layers validate untyped external data (decoded JSON, agent messages) where it enters the process and construct domain objects before calling the engine. The engine itself stays free of JSON, transport, and replay decoding. This deliberately supersedes the earlier requirement that constructors coerce decoded representations and reject booleans masquerading as integers. Those checks are the decoder's, and their tests belong to the decoder.
 
-All moves and cards are immutable and hashable. Canonicalization ensures equivalent arrangements compare equal; rank/count moves already eliminate suit permutations. Face-up public cards and hand tuples are sorted by card ID for stable representation; discard/draw order is meaningful and must be preserved.
+All moves and cards are immutable and hashable. Canonicalization ensures equivalent arrangements compare equal. Rank/count moves already eliminate suit permutations. Face-up public cards and hand tuples are sorted by card ID for stable representation. Discard/draw order is meaningful and must be preserved.
 
-`RulesConfig` documents the fixed profile; first release must reject changed field values or unknown IDs rather than silently claiming they are `shed-v1`. Validation covers correctly typed configurations, and every public entry point that consumes a profile — deck construction included — calls it, so a supported-looking but changed profile can never quietly produce a non-standard deck or game. Earlier optional flags for tens, jokers, pickup, and burns are deliberately replaced by fixed semantics. Add profiles only alongside explicit rules and tests.
+`RulesConfig` documents the fixed profile. The first release must reject changed field values or unknown IDs. Validation covers correctly typed configurations, and every public entry point that consumes a profile (deck construction included) calls it, so a supported-looking but changed profile can never quietly produce a non-standard deck or game. Earlier optional flags for tens, jokers, pickup, and burns are replaced by fixed semantics. Add profiles only alongside explicit rules and tests.
 
 ## 6. Authoritative state and observations
 
@@ -357,7 +357,7 @@ class PlayerView:
     def me(self) -> PublicPlayerState: ...
 ```
 
-`current_ply` counts only resolved PLAY decisions, including pickup and failed reveal. It increments exactly once per such decision. Setup decisions do not increment it. The runner separately numbers **all** decisions, including setup and extra turns.
+`current_ply` counts only resolved PLAY decisions, including pickup and failed reveal. It increments exactly once per such decision. Setup decisions do not increment it. The runner separately numbers all decisions, including setup and extra turns.
 
 `current_player` is the next arrangement submitter in SETUP, the current actor in PLAY, and `None` in FINISHED. `setup` exists only in SETUP. Do not store an independently mutable active-zone field.
 
@@ -367,7 +367,7 @@ class PlayerView:
 
 An observation contains public cards and the viewer's current hand. History preserves previously known information even after a card changes zones. Agent policy must depend only on the view, public rules, its configuration, and its independent random seed.
 
-`observe()` is read-only. It must not resolve a refill or mutate the game. Invalid decision-boundary states raise an invariant error; automatic work belongs inside creation or `apply_move()`. Generating the actor's moves is what performs that check, so an unresolved position is refused whoever asks to observe it.
+`observe()` is read-only. It must not resolve a refill or mutate the game. Invalid decision-boundary states raise an invariant error. Automatic work belongs inside creation or `apply_move()`. Generating the actor's moves is what performs that check, so an unresolved position is refused whoever asks to observe it.
 
 `Outcome` and `PublicPlayerState` are shared value records: both events and observations use them, so they live in `types.py` and keep the module dependencies one-way.
 
@@ -387,7 +387,7 @@ Store growing history in the runner, outside `GameState`. Use these frozen event
 | `PileBurned` | Player, cards, reason `TEN` or `FOUR_OF_A_KIND`; public |
 | `GameEnded` | Outcome; public |
 
-`ObservedEvent` is the union of these event dataclasses. For private events, public recipients receive `cards=None` while retaining the count. Full internal events retain identities for replay. A successful reveal is represented by `CardRevealed` and then optional burn/draw/end events; do not also emit `CardsPlayed` for the same physical transfer.
+`ObservedEvent` is the union of these event dataclasses. For private events, public recipients receive `cards=None` while retaining the count. Full internal events retain identities for replay. A successful reveal is represented by `CardRevealed` and then optional burn/draw/end events. Do not also emit `CardsPlayed` for the same physical transfer.
 
 Initial public events matter: they let agents remember cards visible before arrangements. Setup choices remain private until the collective commit. Pending arrangement transitions emit no public commitment events. Only pass each player's filtered history into their next observation.
 
@@ -395,7 +395,7 @@ For the first release, copying a tuple of filtered history per real decision is 
 
 ## 7. Game operations and legal moves
 
-`GameState` is the engine's entry point. It already stores its `RulesConfig`, so the operations live on it directly rather than on a second rules object; small private helpers keep the methods readable.
+`GameState` is the engine's entry point. It already stores its `RulesConfig`, so the operations live on it directly. Small private helpers keep the methods readable.
 
 ```python
 class GameState:
@@ -428,11 +428,11 @@ class GameState:
     def undo_move(self, transition: Transition) -> None: ...
 ```
 
-`state.outcome` is the outcome accessor, and `is_finished` is a read-only property derived from the phase; neither is stored twice. `deal_initial_state(deck, ...)` remains a module-level helper so a replay can rebuild the opening position from a recorded deck order; `create` is the seeded path to the same function.
+`state.outcome` is the outcome accessor, and `is_finished` is a read-only property derived from the phase. Neither is stored twice. `deal_initial_state(deck, ...)` remains a module-level helper so a replay can rebuild the opening position from a recorded deck order. `create` is the seeded path to the same function.
 
 `get_legal_moves()` is the single legality implementation. It reads the actor's own cards, the public constraint, and the size of the draw pile straight from the state, and builds no observation: the dependency runs one way, from `observe()` to `get_legal_moves()`. This supersedes the earlier sketch in which the generator took a `PlayerView` and three wrappers delegated to it.
 
-`PlayerView` carries a `legal_moves: tuple[Move, ...]` field, populated by `observe()` with the actor's moves and left empty for every other viewer; agents read it directly rather than calling a method. This supersedes the earlier instruction to keep legal moves off the view. The field describes the state that was observed, and is not authority to mutate a later one: `apply_move()` always revalidates against the current position, so a stale tuple can only produce an `IllegalMoveError`. The view is the only place an agent reads legality from: the turn deliberately does not mirror the tuple, so there is one source of truth per decision.
+`PlayerView` carries a `legal_moves: tuple[Move, ...]` field, populated by `observe()` with the actor's moves and left empty for every other viewer. Agents read it directly. This supersedes the earlier instruction to keep legal moves off the view. The field describes the state that was observed and is not authority to mutate a later one. `apply_move()` always revalidates against the current position, so a stale tuple can only produce an `IllegalMoveError`. The view is the only place an agent reads legality from. The turn deliberately does not mirror the tuple, so there is one source of truth per decision.
 
 ### Generation algorithm
 
@@ -511,7 +511,7 @@ flowchart TD
     W -->|No| NEXT["Schedule selected actor"]
 ```
 
-Increment `current_ply` once after every successful PLAY decision. Emit events in physical resolution order. Select next actor only after the win check; FINISHED must have `current_player=None`.
+Increment `current_ply` once after every successful PLAY decision. Emit events in physical resolution order. Select next actor only after the win check. FINISHED must have `current_player=None`.
 
 ### Undo contract
 
@@ -534,7 +534,7 @@ class Transition:
     events: tuple[ObservedEvent, ...]  # Full events; trusted caller only.
 ```
 
-For the first implementation, capture an independent deep snapshot before mutation. `undo_move` restores fields on the existing `GameState` object; rebinding a local variable is not enough. It may replace nested collections. Restore another copy of the snapshot so subsequent state mutation does not corrupt the undo record. Support LIFO undo on the originating simulation state; do not promise arbitrary out-of-order undo.
+For the first implementation, capture an independent deep snapshot before mutation. `undo_move` restores fields on the existing `GameState` object. Rebinding a local variable is not enough. It may replace nested collections. Restore another copy of the snapshot so subsequent state mutation does not corrupt the undo record. Support LIFO undo on the originating simulation state. Do not promise arbitrary out-of-order undo.
 
 The runner filters transition events per recipient. Search callers may ignore them. Never serialize undo snapshots into normal replay records or expose them to agents. If an unexpected internal exception occurs during resolution after mutation has begun, restore the snapshot before propagating the error.
 
@@ -542,9 +542,9 @@ The runner filters transition events per recipient. Search callers may ignore th
 
 - Each of the 54 physical cards occurs in exactly one deck/player/discard/burned zone.
 - IDs, suits, and ranks agree with the canonical deck.
-- Seats and current actor are valid; no pending refill or card effect exists.
+- Seats and current actor are valid. No pending refill or card effect exists.
 - Every live actor has at least one legal move.
-- Empty discard implies unrestricted constraint; stored constraints match resolved effects.
+- Empty discard implies unrestricted constraint. Stored constraints match resolved effects.
 - Hidden assignment changes cannot affect a viewer's legal moves when their observable information is unchanged.
 - SETUP has pending submissions but no prematurely applied arrangements.
 - FINISHED has an outcome, no setup state, no actor, and a winner with no personal cards.
@@ -571,11 +571,11 @@ class Agent(ABC):
     def think(self, view: PlayerView, turn: TurnContext) -> None: ...
 ```
 
-The turn is a channel and nothing more: submission plus a remaining-time query. Legal choices come from `view.legal_moves`, so the earlier sketch's `legal_moves` property on the turn is dropped rather than duplicating one tuple in two places. There is no acceptance acknowledgement, no `submit_final()` alias, and no parallel `choose_move()` interface. The base class owns only the agent's dedicated `random.Random`, because every strategy needs seeded tie-breaking and the factory always supplies a seed.
+The turn is a channel and nothing more: submission plus a remaining-time query. Legal choices come from `view.legal_moves`, so the earlier sketch's `legal_moves` property on the turn is dropped to avoid duplicating one tuple in two places. There is no acceptance acknowledgement, no `submit_final()` alias, and no parallel `choose_move()` interface. The base class owns only the agent's dedicated `random.Random`, because every strategy needs seeded tie-breaking and the factory always supplies a seed.
 
-Agents receive `PlayerView`, never `GameState`. They need no rules object, never recompute legality, and work with typed `Move` objects they neither encode nor decode; public configuration is read from `view.rules`.
+Agents receive `PlayerView`, never `GameState`. They need no rules object, never recompute legality, and work with typed `Move` objects they neither encode nor decode. Public configuration is read from `view.rules`.
 
-`submit(move, final=True)` is the final-move method. Do not add a separate `submit_final()` alias initially. The latest simplified interface uses fire-and-forget submission, so its return value is `None`; earlier sketches with acceptance booleans are superseded. The runner remains the legality authority.
+`submit(move, final=True)` is the final-move method. Do not add a separate `submit_final()` alias initially. The latest simplified interface uses fire-and-forget submission, so its return value is `None`. Earlier sketches with acceptance booleans are superseded. The runner remains the legality authority.
 
 An agent should submit a cheap legal baseline immediately, then improve it:
 
@@ -593,15 +593,15 @@ def think(self, view: PlayerView, turn: TurnContext) -> None:
     turn.submit(best, final=True)
 ```
 
-The remaining-time query reports nonnegative seconds from a monotonic deadline. It is a cooperative hint, not the enforcement mechanism. Work units should be small enough to check it regularly. “Latest” means the latest legal received submission, regardless of its quality; agents choose when an improvement deserves submission.
+The remaining-time query reports nonnegative seconds from a monotonic deadline. It is a cooperative hint, not the enforcement mechanism. Work units should be small enough to check it regularly. “Latest” means the latest legal received submission, regardless of its quality. Agents choose when an improvement deserves submission.
 
 ### Required baselines
 
-**RandomAgent:** sample uniformly from `view.legal_moves` using a dedicated per-decision RNG, and submit final immediately. Uniform rank/count actions avoid overweighting equivalent suit subsets.
+RandomAgent: sample uniformly from `view.legal_moves` using a dedicated per-decision RNG, and submit final immediately. Uniform rank/count actions avoid overweighting equivalent suit subsets.
 
-**GreedyAgent:** handle every phase. During setup, score candidate face-up sets by fixed card retention scores and choose the largest sum. During play prefer the largest count shed; among equally sized plays prefer to spend cards with lower retention score. Score ordinary ranks by their numeric value, seven as 17, nine as 20, two as 21, joker as 22, ten as 23. For blind reveals choose a seeded random slot; pick up when it is the only action. Use seeded random tie-breaking over a deterministically ordered tied list. This is an explicit baseline heuristic, not a claim of optimal strategy.
+GreedyAgent: handle every phase. During setup, score candidate face-up sets by fixed card retention scores and choose the largest sum. During play prefer the largest count shed. Among equally sized plays prefer to spend cards with lower retention score. Score ordinary ranks by their numeric value, seven as 17, nine as 20, two as 21, joker as 22, ten as 23. For blind reveals choose a seeded random slot. Pick up when it is the only action. Use seeded random tie-breaking over a deterministically ordered tied list. This is an explicit baseline heuristic, not a claim of optimal strategy.
 
-Use an `AgentSpec` rather than serializing live agent objects:
+Use an `AgentSpec` instead of serializing live agent objects:
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -613,9 +613,9 @@ class AgentSpec:
 def build_agent(spec: AgentSpec, *, seed: int) -> Agent: ...
 ```
 
-Add typed configuration fields only when an implemented agent needs them. Do not store a deck seed in `AgentSpec`. A small explicit built-in factory suffices; dynamic discovery is unnecessary. It lives in its own module above the strategies rather than beside the `Agent` base class, so it can import every built-in agent at module scope: `base` holds the interface and imports nothing from the package, each strategy imports `base`, and `factory` imports both. The spec validates its own kind against the built-in list when it is constructed, so a mistyped lineup fails where it is written rather than inside a worker at decision time.
+Add typed configuration fields only when an implemented agent needs them. Do not store a deck seed in `AgentSpec`. A small explicit built-in factory suffices. Dynamic discovery is unnecessary. It lives in its own module above the strategies, so it can import every built-in agent at module scope. `base` holds the interface and imports nothing from the package. Each strategy imports `base`, and `factory` imports both. The spec validates its own kind against the built-in list when it is constructed, so a mistyped lineup fails where it is written, not inside a worker at decision time.
 
-Baselines can be driven synchronously with a fake in-memory turn context that captures submissions and dictates the clock. A whole match runs that way with no production timing code: create the state, filter `initial_events()` per player, observe the actor with that player's history, build a fresh agent from its spec and a fresh seed, let it think, apply the finalized move, then append the filtered transition events to every player's history.
+Baselines can be driven synchronously with a fake in-memory turn context that captures submissions and dictates the clock. A whole match runs that way with no production timing code. Create the state, filter `initial_events()` per player, observe the actor with that player's history, build a fresh agent from its spec and a fresh seed, let it think, apply the finalized move, then append the filtered transition events to every player's history.
 
 ## 10. Timed decisions and match runner
 
@@ -640,31 +640,31 @@ There is no application-level cap on the number of submissions. Transport has fi
 
 ### 10.2 Minimal process model
 
-Use one newly spawned process per decision. It receives only `AgentSpec`, a fresh independent agent seed, the `PlayerView` (which already carries that decision's legal moves), its deadline, and a dedicated send endpoint. Instantiate the agent in the worker. Do not pass live agents, `GameState`, match results, or replay seeds. Never fork a worker from the runner, which would hand it a copy of the parent's memory, where the authoritative state lives: use a `forkserver` where the platform has one — its server is created by fork and immediate exec of a fresh interpreter, so workers fork from a process that never held the game — and `spawn` otherwise. Preloading the runner module in the server is what makes per-decision startup roughly 14 ms rather than 120 ms.
+Use one newly spawned process per decision. It receives only `AgentSpec`, a fresh independent agent seed, the `PlayerView` (which already carries that decision's legal moves), its deadline, and a dedicated send endpoint. Instantiate the agent in the worker. Do not pass live agents, `GameState`, match results, or replay seeds. Never fork a worker from the runner, which would hand it a copy of the parent's memory where the authoritative state lives. Use a `forkserver` where the platform has one (its server is created by fork and immediate exec of a fresh interpreter, so workers fork from a process that never held the game) and `spawn` otherwise. Preloading the runner module in the server cuts per-decision startup from about 120 ms to about 14 ms.
 
 This corrects a limitation of the earlier example: repeatedly spawning a copy of a live random agent can repeatedly reset the same RNG state. Construct a fresh agent with a fresh recorded seed instead.
 
-The first release intentionally has **no persistent agent memory between decisions**. Public/private observed history lets an agent reconstruct knowledge. If persistent search state is needed later, use one persistent worker per seat and define recovery explicitly; do not pretend mutations in a child update the parent.
+The first release intentionally has no persistent agent memory between decisions. Public/private observed history lets an agent reconstruct knowledge. If persistent search state is needed later, use one persistent worker per seat and define recovery explicitly. Do not pretend mutations in a child update the parent.
 
 Default to a 2-second budget, configurable and strictly positive and finite. The deadline begins immediately before `process.start()`, so process startup, argument transport, and agent construction count against it. This is intentionally simple but unsuitable for very short budgets. Initialization failures before the worker starts are infrastructure errors, not ordinary agent strategy failures.
 
 ### 10.3 Pipes and the turn context
 
-`multiprocessing.Pipe(duplex=False)` returns `(receiver, sender)`. The worker uses the sender; the parent runner keeps the receiver. After spawn, the parent closes its copy of the sender so EOF can be detected. The worker closes its sender in a `finally` block.
+`multiprocessing.Pipe(duplex=False)` returns `(receiver, sender)`. The worker uses the sender. The parent runner keeps the receiver. After spawn, the parent closes its copy of the sender so EOF can be detected. The worker closes its sender in a `finally` block.
 
-The concrete pipe-backed `TurnContext` stores the sender, the monotonic deadline, and a local closed flag; the legal moves stay on the view the worker is given. `remaining_seconds()` clamps the clock difference to zero. `submit()` sends a small `Submission(move, final)` message unless locally expired or closed, and sets its local closed flag after sending final. Broken-pipe errors mean the turn is closed and should not crash normal cleanup.
+The concrete pipe-backed `TurnContext` stores the sender, the monotonic deadline, and a local closed flag. The legal moves stay on the view the worker is given. `remaining_seconds()` clamps the clock difference to zero. `submit()` sends a small `Submission(move, final)` message unless locally expired or closed, and sets its local closed flag after sending final. Broken-pipe errors mean the turn is closed and should not crash normal cleanup.
 
-The worker calls `think()`, then sends a `WorkerFinished` message. On an ordinary agent exception, send a small `WorkerFailed` record with exception type/message, then close. Use tagged frozen dataclasses for these three message types; keep them in `match.py`. Do not ship huge tracebacks or arbitrary data structures as moves.
+The worker calls `think()`, then sends a `WorkerFinished` message. On an ordinary agent exception, send a small `WorkerFailed` record with exception type/message, then close. Use tagged frozen dataclasses for these three message types and keep them in `match.py`. Do not ship huge tracebacks or arbitrary data structures as moves.
 
-The parent validates message type, final flag, canonical move shape, and legal membership. An illegal final candidate preserves the previous valid candidate; because the local context closes on final, the agent will normally finish and selection closes on its completion message.
+The parent validates message type, final flag, canonical move shape, and legal membership. An illegal final candidate preserves the previous valid candidate. Because the local context closes on final, the agent will normally finish and selection closes on its completion message.
 
 Use one fresh pipe per decision. Add a match-local sequential `decision_id` to records, but a turn-ID field on every message is unnecessary in this isolated-per-decision model. Persistent shared pipes would require explicit IDs and stale-message rejection.
 
-Python's process, pipe, serialization, and cleanup behavior is documented in the [multiprocessing reference](https://docs.python.org/3/library/multiprocessing.html). Use spawn-compatible top-level functions and serializable arguments; the worker must be importable.
+Python's process, pipe, serialization, and cleanup behavior is documented in the [multiprocessing reference](https://docs.python.org/3/library/multiprocessing.html). Use spawn-compatible top-level functions and serializable arguments. The worker must be importable.
 
 ### 10.4 Parent selection loop
 
-Implement this as a small runner helper; the selection policy should also be testable independently with an injected clock.
+Implement this as a small runner helper. The selection policy should also be testable independently with an injected clock.
 
 ```text
 legal_moves = view.legal_moves
@@ -696,15 +696,15 @@ return selection record
 
 Receipt means a complete message has been received and the runner checks its monotonic clock before validation. Equality with the deadline is late. Use the runner's timestamp, never an agent-supplied timestamp. Buffered moves not received before expiry do not count. Single-threaded parent selection avoids lock races.
 
-Validate and canonicalize only bounded, small move messages. A received on-time message may finish validation just after the deadline; its receive timestamp governs eligibility. Never continue draining buffered candidates after expiry to choose a newer one.
+Validate and canonicalize only bounded, small move messages. A received on-time message may finish validation just after the deadline. Its receive timestamp governs eligibility. Never continue draining buffered candidates after expiry to choose a newer one.
 
 ### 10.5 Enforcement limits and cleanup
 
-Polling in the worker cannot stop infinite loops. The parent must independently stop the worker on deadline or accepted finalization: request termination, join with a short bounded grace (e.g. 0.1 seconds), then kill if still alive and join/reap it. Close process resources only after it stops. Cleanup belongs in `finally`, including keyboard interruptions and validation failures. A reused pipe must never survive terminated-worker cleanup; this design discards it.
+Polling in the worker cannot stop infinite loops. The parent must independently stop the worker on deadline or accepted finalization: request termination, join with a short bounded grace (e.g. 0.1 seconds), then kill if still alive and join/reap it. Close process resources only after it stops. Cleanup belongs in `finally`, including keyboard interruptions and validation failures. A reused pipe must never survive terminated-worker cleanup. This design discards it.
 
-The budget is an **acceptance deadline**, not a guarantee that `choose_move()` returns at exactly that instant. Spawn, OS scheduling, message receipt/deserialization, and process cleanup can add latency. `poll()` signals readability; it is not a proof that a subsequent framed receive can never block. Keep the supported threat model to trusted local Python agents sending small well-formed messages. For hostile or arbitrary payloads, a watchdog and bounded nonblocking transport plus a real sandbox are a separate project.
+The budget is an acceptance deadline, not a guarantee that `choose_move()` returns at exactly that instant. Spawn, OS scheduling, message receipt/deserialization, and process cleanup can add latency. `poll()` signals readability. It is not a proof that a subsequent framed receive can never block. Keep the supported threat model to trusted local Python agents sending small well-formed messages. For hostile or arbitrary payloads, a watchdog and bounded nonblocking transport plus a real sandbox are a separate project.
 
-Do not describe threads or cancelling a future as hard termination. Do not use multiprocessing deserialization as a security boundary. First-release agents must not spawn their own child processes; terminating one worker does not automatically kill arbitrary descendants.
+Do not describe threads or cancelling a future as hard termination. Do not use multiprocessing deserialization as a security boundary. First-release agents must not spawn their own child processes. Terminating one worker does not automatically kill arbitrary descendants.
 
 ### 10.6 Runner API and match loop
 
@@ -739,13 +739,13 @@ class MatchRunner:
 
 Validate that agent seats are exactly `0..len(agents)-1` before the match. `run()` creates the fresh state through `GameState.create(len(agents), seed=deal_seed, dealer=dealer)` and records the initialization metadata. Use a shared deterministic shuffle/deal helper to retain or reconstruct the initial shuffled deck order from that seed for replay. Initialize filtered histories from `state.initial_events()`. This slightly tightens the earlier `run(state)` sketch so replay initialization is always available. Loading a partially played state without its history is not supported.
 
-At each decision: check action limit; build actor view with filtered history; select a move; enforce strict-failure policy if enabled; apply it once; append full events and the turn record; update all filtered histories. Return when rules finish, failure aborts, or action limit truncates. The runner's terminal status is separate from `GameState.phase`: truncation must not fabricate an `Outcome`.
+At each decision, check the action limit, build the actor view with filtered history, select a move, enforce the strict-failure policy if enabled, apply it once, append full events and the turn record, and update all filtered histories. Return when rules finish, failure aborts, or action limit truncates. The runner's terminal status is separate from `GameState.phase`. Truncation must not fabricate an `Outcome`.
 
 Default fallback mode continues after agent errors using the latest accepted candidate, or a uniform random legal action if none exists. In strict mode, any rejected submission, worker failure, or absence of a valid submission aborts the match as `AGENT_FAILED` before applying the selected action. A deadline with a legal candidate is not a failure in either mode.
 
 ## 11. Results, replay, and deterministic seeds
 
-Required result types may live in `match.py`; do not add a module per dataclass.
+Required result types may live in `match.py`. Do not add a module per dataclass.
 
 | Type | Required fields |
 | --- | --- |
@@ -757,11 +757,11 @@ Engine and runner infrastructure errors stop a match and are reported distinctly
 
 Use separate seed streams for deck shuffle, agent decisions, and fallback selection. Never use module-global randomness. Record deck seed only in trusted match metadata. Have the gauntlet generate independent streams from its experiment seed using a stable algorithm, such as SHA-256 of a canonical JSON tuple `(experiment_seed, purpose, match_index, seat, decision_id)`, interpreted as an integer. Do not use Python's randomized `hash()`.
 
-Wall-time search is not bit-for-bit reproducible: scheduling changes how many improvements finish. **Recorded move replay must be deterministic** even when rerunning the timed agents would choose differently. Baselines can also be tested synchronously with a fake turn context to remove timing variability.
+Wall-time search is not bit-for-bit reproducible: scheduling changes how many improvements finish. Recorded move replay must be deterministic even when rerunning the timed agents would choose differently. Baselines can also be tested synchronously with a fake turn context to remove timing variability.
 
 ### Replay format
 
-Write UTF-8 JSON with explicit tags for moves, constraints, and events; store enum string names or values consistently and decode explicitly. Decoding is where external data is validated: check tags, types, and ranges, then build the engine's domain objects (`Rank`, `CardId`, `Play`, …) and hand those to the engine, which assumes them well-typed. Do not save pickle as the replay format. Example move encoding: `{"type":"play","source":"hand","rank":7,"count":2}`.
+Write UTF-8 JSON with explicit tags for moves, constraints, and events. Store enum string names or values consistently and decode explicitly. Decoding is where external data is validated: check tags, types, and ranges, then build the engine's domain objects (`Rank`, `CardId`, `Play`, …) and hand those to the engine, which assumes them well-typed. Do not save pickle as the replay format. Example move encoding: `{"type":"play","source":"hand","rank":7,"count":2}`.
 
 Metadata includes replay schema, ruleset ID/config, package version, source revision if available, Python version, player count, dealer, canonical initial deck order, deal seed, agent specs/seeds, timing/failure policy, and final match status. Storing initial deck order alongside the seed makes replay independent of future shuffle implementation changes. Neither is exposed to agents.
 
@@ -771,9 +771,9 @@ Complete replay files contain hidden information and are trusted post-match arti
 
 ## 12. Gauntlet
 
-Start sequentially to avoid concurrent agents competing for CPU during wall-time comparisons. Default to two-player round robins; also support an explicitly supplied lineup of 2–5 agents.
+Start sequentially to avoid concurrent agents competing for CPU during wall-time comparisons. Default to two-player round robins. Also support an explicitly supplied lineup of 2–5 agents.
 
-For each seed in a deal bank and each lineup, create a fixed deal, then rotate agent assignments through seats. Keep the same dealer and deck for each rotation. Cyclic rotations give every participant every seat; do not claim they cover every multiplayer seating permutation. An optional later all-permutations schedule can examine relative ordering effects.
+For each seed in a deal bank and each lineup, create a fixed deal, then rotate agent assignments through seats. Keep the same dealer and deck for each rotation. Cyclic rotations give every participant every seat. Do not claim they cover every multiplayer seating permutation. An optional later all-permutations schedule can examine relative ordering effects.
 
 Create fresh agent specs/workers for each decision and derive separate seeds per seat and decision. Keep deck randomness unchanged by agent failures or fallback draws. Preserve all match records, including failed and truncated matches.
 
@@ -783,21 +783,21 @@ Report:
 - Wins and win rate per agent among finished matches, with explicit denominators.
 - Win rates by seat and opponent/lineup.
 - Fallback, rejected-submission, and crash counts/rates.
-- Mean and median selection time; optionally play decisions per match.
+- Mean and median selection time (optionally play decisions per match).
 
-Do not silently exclude failed/truncated matches from accounting or label them losses. A simple interval on finished-game win rates can be added, but rotated results share deals and are correlated. If uncertainty intervals are required, resample whole deal blocks rather than treating each rotation as independent.
+Do not silently exclude failed/truncated matches from accounting or label them losses. A simple interval on finished-game win rates can be added, but rotated results share deals and are correlated. If uncertainty intervals are required, resample whole deal blocks. Individual rotations are correlated and must not be treated as independent.
 
-Write machine-readable JSON and a compact console table. Make long gauntlets resumable later; not required for the first release.
+Write machine-readable JSON and a compact console table. Making long gauntlets resumable is not required for the first release.
 
 ## 13. Toolset and project configuration
 
 Use Python 3.12 as a conservative baseline and standard library runtime dependencies. Use modern union and `type` alias syntax. Keep dependency installation and execution under `uv`. Commit `uv.lock` and use locked synchronization in CI. See [uv project documentation](https://docs.astral.sh/uv/guides/projects/).
 
-Use Ruff for formatting, linting, and import ordering, and ty for type checking. Configure both in `pyproject.toml`; see [Ruff configuration](https://docs.astral.sh/ruff/configuration/) and [ty configuration](https://docs.astral.sh/ty/configuration/). Use pytest for behavior tests; Hypothesis is optional for invariants once basic tests exist.
+Use Ruff for formatting, linting, and import ordering, and ty for type checking. Configure both in `pyproject.toml`. See [Ruff configuration](https://docs.astral.sh/ruff/configuration/) and [ty configuration](https://docs.astral.sh/ty/configuration/). Use pytest for behavior tests. Hypothesis is optional for invariants once basic tests exist.
 
 ### Scaffold with tools first
 
-Use supported scaffolding and dependency-management commands wherever available. In a new project directory, initialize the package rather than hand-writing its generated files:
+Use supported scaffolding and dependency-management commands wherever available. In a new project directory, initialize the package instead of hand-writing its generated files:
 
 ```bash
 uv init --lib --name shed --python 3.12 --build-backend hatchling
@@ -805,11 +805,11 @@ uv add --dev pytest ruff ty
 uv sync
 ```
 
-Check `uv init --help` for the installed version's backend spelling; use `hatch` if that version names the Hatchling option that way. See [uv project initialization](https://docs.astral.sh/uv/concepts/projects/init/). Run initialization only for a new project; preserve and incrementally update an existing scaffold.
+Check `uv init --help` for the installed version's backend spelling. Use `hatch` if that version names the Hatchling option that way. See [uv project initialization](https://docs.astral.sh/uv/concepts/projects/init/). Run initialization only for a new project. Preserve and incrementally update an existing scaffold.
 
-Let `uv init` generate `pyproject.toml`, the package scaffold, and other supported starter files. Let `uv add`, `uv remove`, `uv lock`, and `uv sync` manage dependencies and the lockfile. **Never create or edit `uv.lock` manually.** Use `uv python pin 3.12` when the interpreter pin needs to be set or changed. Apply the same tool-first approach to other generated project files when an appropriate scaffolding command exists.
+Let `uv init` generate `pyproject.toml`, the package scaffold, and other supported starter files. Let `uv add`, `uv remove`, `uv lock`, and `uv sync` manage dependencies and the lockfile. Never create or edit `uv.lock` manually. Use `uv python pin 3.12` when the interpreter pin needs to be set or changed. Apply the same tool-first approach to other generated project files when an appropriate scaffolding command exists.
 
-After scaffolding, edit only the project-specific metadata and configuration that the tools do not supply, and replace generated example code with Shed code. Do not overwrite the generated `pyproject.toml` wholesale with the example below; preserve generated build requirements and merge the relevant settings.
+After scaffolding, edit only the project-specific metadata and configuration that the tools do not supply, and replace generated example code with Shed code. Do not overwrite the generated `pyproject.toml` wholesale with the example below. Preserve generated build requirements and merge the relevant settings.
 
 The following is a target configuration reference, not a file-creation recipe. Tool versions are resolved into `uv.lock` by uv during implementation:
 
@@ -873,7 +873,7 @@ uv run pytest
 uv build
 ```
 
-No mypy, Black, isort, Poetry, or pip requirements file is needed alongside this stack. Hatchling only builds the package; uv remains the project/dependency tool.
+No mypy, Black, isort, Poetry, or pip requirements file is needed alongside this stack. Hatchling only builds the package. uv remains the project/dependency tool.
 
 ### Required command-line workflows
 
@@ -886,26 +886,26 @@ uv run scripts/replay.py results/match.json --verify
 uv run scripts/benchmark.py --iterations 10000
 ```
 
-Use `argparse`. `--agents` supplies a lineup; repeated kinds get distinct instance labels automatically. Validate player count, finite positive budget, positive deal/iteration counts, and output paths. Create missing output parent directories. Exit nonzero on malformed input, infrastructure errors, or failed replay verification. Console play can show public actions and the final outcome without dumping hidden state by default.
+Use `argparse`. `--agents` supplies a lineup. Repeated kinds get distinct instance labels automatically. Validate player count, finite positive budget, positive deal/iteration counts, and output paths. Create missing output parent directories. Exit nonzero on malformed input, infrastructure errors, or failed replay verification. Console play can show public actions and the final outcome without dumping hidden state by default.
 
 ## 14. Coding conventions
 
 - Favor small functions, dataclasses, tuples, enums, and one concrete rules class.
 - Use PascalCase classes, snake_case functions/variables/modules, and UPPER_CASE constants.
-- Annotate public APIs and internal functions where types help; all shipped code must pass ty.
+- Annotate public APIs and internal functions where types help. All shipped code must pass ty.
 - Use frozen, slotted dataclasses for cards, actions, observations, specs, and events. Mutable state dataclasses use slots and `default_factory` for collections.
-- Use explicit move unions and pattern matching; do not overload `None` to mean pass or pickup.
-- Keep rules pure where possible; contain mutation in initialization and transition helpers.
+- Use explicit move unions and pattern matching. Do not overload `None` to mean pass or pickup.
+- Keep rules pure where possible. Contain mutation in initialization and transition helpers.
 - Keep clocks, processes, file I/O, and randomness out of legal-move generation.
 - Inject or construct independent RNGs explicitly. Never seed global `random`.
 - Use deterministic iteration and canonical serialized forms. Never let set iteration choose moves or determine card transfer order.
-- Validate external/agent input with exceptions or rejection results, at the decoding and transport boundaries where it arrives. Engine code assumes its annotated types and checks domain invariants only. Use assertions for internal invariants only; do not rely on them for validation under optimized Python.
-- Introduce `IllegalMoveError(ValueError)` and `StateInvariantError(RuntimeError)`; avoid broad exception swallowing. Catch agent exceptions only at the worker boundary and engine failures at the runner boundary.
-- Use **Google-style docstrings everywhere**: modules, classes, functions, methods, properties, private helpers, scripts, tests, and fixtures. Document contracts, ownership, hidden-information restrictions, and timing semantics. Comments explain why a choice exists, not each obvious assignment.
+- Validate external/agent input with exceptions or rejection results, at the decoding and transport boundaries where it arrives. Engine code assumes its annotated types and checks domain invariants only. Use assertions for internal invariants only. Do not rely on them for validation under optimized Python.
+- Introduce `IllegalMoveError(ValueError)` and `StateInvariantError(RuntimeError)`. Avoid broad exception swallowing. Catch agent exceptions only at the worker boundary and engine failures at the runner boundary.
+- Use Google-style docstrings everywhere: modules, classes, functions, methods, properties, private helpers, scripts, tests, and fixtures. Document contracts, ownership, hidden-information restrictions, and timing semantics. Comments explain why a choice exists, not each obvious assignment.
 - Avoid getters/setters for plain data, abstract classes for individual cards, service locators, registries, and redundant caches.
-- Keep package exports intentional; no wildcard imports or import-time execution.
+- Keep package exports intentional. No wildcard imports or import-time execution.
 - Use `pathlib.Path`, UTF-8, and explicit JSON encoders/decoders for artifacts.
-- Keep test fixtures small and legal; helper constructors may build edge-case states but must preserve card accounting when testing global invariants.
+- Keep test fixtures small and legal. Helper constructors may build edge-case states but must preserve card accounting when testing global invariants.
 - Do not optimize with compact bitfields, custom undo deltas, or shared-memory workers before profiling.
 
 ### Google-style docstring requirements
@@ -920,12 +920,12 @@ def remaining_seconds(self) -> float:
 
     Returns:
         Seconds until the monotonic deadline, clamped to zero. This value
-        is a cooperative hint; the match runner enforces the deadline.
+        is a cooperative hint. The match runner enforces the deadline.
     """
     return max(0.0, self._deadline - time.monotonic())
 ```
 
-Enable Ruff's `D` rules with `convention = "google"` as shown above; see [Ruff's docstring convention setting](https://docs.astral.sh/ruff/settings/#lint_pydocstyle_convention). These checks cover supported presence and formatting rules, but they do not guarantee complete semantic documentation or coverage of every private helper. Code review must enforce the full requirement, including scripts and tests. Do not blanket-disable docstring checks for test files. Interface sketches elsewhere in this document omit some docstrings for readability; the implemented code must supply them.
+Enable Ruff's `D` rules with `convention = "google"` as shown above. See [Ruff's docstring convention setting](https://docs.astral.sh/ruff/settings/#lint_pydocstyle_convention). These checks cover supported presence and formatting rules, but they do not guarantee complete semantic documentation or coverage of every private helper. Code review must enforce the full requirement, including scripts and tests. Do not blanket-disable docstring checks for test files. Interface sketches elsewhere in this document omit some docstrings for readability. The implemented code must supply them.
 
 ## 15. Required tests and acceptance examples
 
@@ -947,15 +947,15 @@ Enable Ruff's `D` rules with `convention = "google"` as shown above; see [Ruff's
 | Observation | No shared mutable state; private draw filtering; pre/post-setup public knowledge retained |
 | Invariants | Card conservation and legal-move/application agreement over seeded full random matches |
 
-Key examples: under `AtMost(SEVEN)`, eight is illegal while two, nine, ten, and joker remain legal; after seven then nine, the constraint is still `AtMost(SEVEN)`; playing the last hand card while the deck can refill does not finish the player.
+Key examples: under `AtMost(SEVEN)`, eight is illegal while two, nine, ten, and joker remain legal. After seven then nine, the constraint is still `AtMost(SEVEN)`. Playing the last hand card while the deck can refill does not finish the player.
 
 Build two complete states differing only in unknown card assignments. With equivalent public/private history, the same viewer must receive equal observations and equal legal moves. In particular, swapping face-down ranks cannot change reveal options. A belief sampler test must respect this boundary when one is eventually implemented.
 
 ### Runner and agents
 
-Test the selection policy using a fake clock and fake transport first: latest accepted candidate wins; illegal replacements preserve previous candidates; final closes; no submission uses legal fallback; equality at the deadline is late; messages buffered past expiry are ignored; completion and failure are distinguished.
+Test the selection policy using a fake clock and fake transport first. Verify that the latest accepted candidate wins, illegal replacements preserve previous candidates, final closes, no submission uses the legal fallback, equality at the deadline is late, messages buffered past expiry are ignored, and completion and failure are distinguished.
 
-Add a small set of actual spawn-process tests for immediate final, repeated submissions, return without submission, exception after submission, infinite computation, and final-then-infinite computation. Use budgets comfortably above process startup and generous cleanup bounds; assert selected moves and worker cleanup, not millisecond-perfect runtime.
+Add a small set of actual spawn-process tests for immediate final, repeated submissions, return without submission, exception after submission, infinite computation, and final-then-infinite computation. Use budgets comfortably above process startup and generous cleanup bounds. Assert selected moves and worker cleanup, not millisecond-perfect runtime.
 
 Verify fresh per-decision seeds prevent repeated RNG reset, finite-budget validation rejects NaN/infinity, a reused runner cannot consume previous-turn messages, and no worker remains alive after success/failure/timeout. Test strict failure mode separately from fallback continuation.
 
@@ -969,20 +969,20 @@ For a two-agent lineup and N deals, seat rotation produces 2N matches. Check sha
 
 ## 16. Performance and future search
 
-The conversation expected Shed's engine to be lighter per simulated decision than Hive's graph-based movement generation. This is a design expectation, not a measured speedup. Hive's connectivity and movement traversals were discussed as recurring work; Shed primarily groups bounded card collections, compares ranks, and transfers card references.
+The conversation expected Shed's engine to be lighter per simulated decision than Hive's graph-based movement generation. This is a design expectation, not a measured speedup. Hive's connectivity and movement traversals were discussed as recurring work. Shed primarily groups bounded card collections, compares ranks, and transfers card references.
 
 Rank/count move generation is O(H + M), with M ≤ H. A single deck bounds rank multiplicities and total card transfer sizes. Full-state snapshot undo and repeatedly copied history may dominate otherwise cheap operations. Benchmark before replacing them.
 
-Measure legal generation, apply/undo pairs, observation construction, and engine-only full random playouts separately. Exclude worker startup and timed waiting from engine throughput. Use representative hand sizes, face-up/face-down states, pickups, and burns; report Python/platform and fixture sizes. Use `time.perf_counter()` and avoid brittle speed thresholds in unit tests.
+Measure legal generation, apply/undo pairs, observation construction, and engine-only full random playouts separately. Exclude worker startup and timed waiting from engine throughput. Use representative hand sizes, face-up/face-down states, pickups, and burns. Report Python/platform and fixture sizes. Use `time.perf_counter()` and avoid brittle speed thresholds in unit tests.
 
 `shed.benchmark` implements exactly that, and `scripts/benchmark.py` is its argument parser. Two details of the implementation are worth stating, because a reader could otherwise misread a row:
 
-- **Observation includes legality.** `observe()` fills `PlayerView.legal_moves` for the acting seat on every call, so an observation row is the matching legality row plus the snapshot of the public position around it. The two are printed together so the inclusion is visible. History is passed in already filtered and stored by reference, so its length does not appear in that cost; filtering it is the runner's.
-- **The legality rows build no view at all.** They call `get_legal_moves()` on the state, which is the whole point of having the generator read the state rather than an observation.
+- Observation includes legality. `observe()` fills `PlayerView.legal_moves` for the acting seat on every call, so an observation row is the matching legality row plus the snapshot of the public position around it. The two are printed together so the inclusion is visible. History is passed in already filtered and stored by reference, so its length does not appear in that cost. Filtering it is the runner's work.
+- The legality rows build no view at all. They call `get_legal_moves()` on the state, which is what allows the generator to read the state directly.
 
-Fixtures are discovered from seeded games rather than hand-written, so they are positions the engine actually reaches and the same seed measures the same ones. The engine-only claim is structural, not a convention: the module does not import `shed.match`, `shed.agents`, or `multiprocessing`, and a test asserts that by reading its imports.
+Fixtures are discovered from seeded games instead of hand-written, so they are positions the engine actually reaches and the same seed measures the same ones. The engine-only claim is structural. The module does not import `shed.match`, `shed.agents`, or `multiprocessing`, and a test asserts that by reading its imports.
 
-What the first measurements showed, on one machine and one interpreter (CPython 3.12.3, Linux, three players): snapshot undo dominates everything else by roughly two orders of magnitude. Legal-move generation costs 2–26 µs across the fixtures, an observation 11–35 µs, and an apply/undo pair about 1 ms — most of it the two deep copies undo needs, since a bare apply inside a playout costs roughly half the pair. That is the expectation above confirmed — "full-state snapshot undo ... may dominate otherwise cheap operations" — and it says where a future search should look first. It is still not a comparison with Hive: nothing here measured Hive, and no such claim should be made without doing so.
+What the first measurements showed, on one machine and one interpreter (CPython 3.12.3, Linux, three players): snapshot undo dominates everything else by roughly two orders of magnitude. Legal-move generation costs 2–26 µs across the fixtures, an observation 11–35 µs, and an apply/undo pair about 1 ms (most of it the two deep copies undo needs, since a bare apply inside a playout costs roughly half the pair). This confirms the expectation ("full-state snapshot undo ... may dominate otherwise cheap operations") and says where a future search should look first. This is not a comparison with Hive. Nothing here measured Hive, and no such claim should be made without doing so.
 
 Future search must handle hidden information, more than two players, and extra turns. Do not transfer two-player negamax unchanged. A later interface can be:
 
@@ -1005,7 +1005,7 @@ The sample is hypothetical and consistent with observed cards/history, not the t
 8. Implement replay JSON, validation, CLI play/replay commands, and sequential gauntlet.
 9. Add benchmark script, document limitations, and run the required gates.
 
-The work is complete when project files were scaffolded with the appropriate tools; all implemented Python objects have Google-style docstrings; a clean checkout can sync with uv; Ruff, ty, tests, and package build pass; both baselines play complete legal games; timed decisions obey the specified selection contract; workers are reaped; replays reproduce final states; and gauntlet output accounts for every scheduled result. No GUI or advanced search is necessary to call this first implementation complete.
+The work is complete when all of the following hold: project files were scaffolded with the appropriate tools, all implemented Python objects have Google-style docstrings, a clean checkout can sync with uv, Ruff and ty and tests and the package build pass, both baselines play complete legal games, timed decisions obey the specified selection contract, workers are reaped, replays reproduce final states, and gauntlet output accounts for every scheduled result. No GUI or advanced search is necessary to call this first implementation complete.
 
 ## 18. Consolidated decisions replacing earlier alternatives
 
@@ -1028,4 +1028,4 @@ The work is complete when project files were scaffolded with the appropriate too
 | Many configurable rule flags | One fixed versioned profile with explicit edge-case conventions |
 | Growing history inside state/undo | Runner-owned filtered history and separate trusted replay |
 
-Use these decisions to resolve implementation ambiguity without reopening the architecture. If a concrete invariant cannot be satisfied, document the conflict and change the smallest relevant piece rather than introducing a general framework.
+Use these decisions to resolve implementation ambiguity without reopening the architecture. If a concrete invariant cannot be satisfied, document the conflict and change the smallest relevant piece. Avoid introducing a general framework.

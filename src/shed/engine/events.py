@@ -264,8 +264,8 @@ class Decision:
 class UndoRecord:
     """An independent snapshot of the state from before a move was applied.
 
-    The first implementation snapshots the whole state rather than computing
-    deltas; benchmark before replacing it.
+    The first implementation snapshots the whole state instead of computing
+    deltas. Benchmark before replacing it.
 
     Attributes:
         before: Deep copy of the state as it was before mutation. It is never
