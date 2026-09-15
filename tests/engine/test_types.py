@@ -156,7 +156,7 @@ def test_default_rules_profile_validates() -> None:
     """The unmodified profile is accepted and describes a 54-card deck."""
     config = RulesConfig()
     config.validate()
-    assert config.id == "shed-v1"
+    assert config.id == "standard"
     assert config.deck_size == 54
 
 
@@ -173,7 +173,7 @@ def test_default_rules_profile_validates() -> None:
 def test_correctly_typed_but_unsupported_profiles_are_rejected(
     config: RulesConfig, message: str
 ) -> None:
-    """A changed profile must never silently claim to be ``shed-v1``."""
+    """A changed profile must never silently claim to be ``standard``."""
     with pytest.raises(ValueError, match=message):
         config.validate()
     with pytest.raises(ValueError, match=message):

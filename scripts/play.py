@@ -1,30 +1,3 @@
-"""Play one timed Shed match and, when asked, save its replay.
-
-Usage from the repository root::
-
-    uv run scripts/play.py --agents random greedy --seed 42 --output results/match.json
-
-The console shows the public actions and the final outcome. Hidden information
--- the dealt hands, every replenishment draw, the face-down identities -- stays
-out of it by default: private events are reported by count. ``--omniscient``
-opts into the operator view instead, printing those identities and the whole
-final position, which is how you read back what an agent was actually holding
-when it decided. It changes only what is printed: the agents in this very match
-were given filtered observations regardless. The saved replay is a complete
-trusted artifact either way, which is why it is written only where the caller
-asks for it.
-
-``--quiet`` and ``--omniscient`` are orthogonal. ``--quiet`` drops the action
-log; ``--omniscient`` unredacts it and adds the final position. Together they
-print the summary and the final position and nothing else.
-
-This file is an argument parser and nothing else. Lineups, narration, and
-summaries live in :mod:`shed.cli`, and the match itself is run by
-:class:`~shed.match.MatchRunner`. Starting it is behind a main guard because
-every decision starts a worker process, and a spawned or forkserver worker
-re-imports this module.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -166,7 +139,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     result = runner.run(deal_seed=args.seed, dealer=PlayerId(args.dealer))
 
     # The artifact is written before anything is printed, so a console that goes
-    # away -- a pipe into `head`, a closed terminal -- cannot cost the replay.
+    # away, a pipe into `head`, a closed terminal, cannot cost the replay.
     written = None
     if args.output is not None:
         try:

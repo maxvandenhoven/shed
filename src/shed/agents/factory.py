@@ -1,16 +1,3 @@
-"""The serializable participant specification and the built-in agent factory.
-
-Agents are built fresh for every decision from an :class:`AgentSpec` and an
-explicit seed, so no live object and no generator state ever crosses a process
-boundary. That is what keeps repeated construction from replaying the same
-random stream, and it is why the specification carries no seed of its own.
-
-The factory sits above the strategies: it imports every built-in agent at module
-scope, which is exactly why it is not part of :mod:`shed.agents.base`. A
-strategy importing its base class therefore never reaches the factory, and no
-import has to be deferred into a function body to break a cycle.
-"""
-
 from dataclasses import dataclass
 
 from shed.agents.base import Agent
@@ -72,7 +59,7 @@ def build_agent(spec: AgentSpec, *, seed: int) -> Agent:
         spec: The participant to build. Its kind was already validated when the
             specification was created.
         seed: Seed for the new agent's generator. Pass a fresh value per
-            decision -- reusing one replays the same random stream -- and never
+            decision, reusing one replays the same random stream, and never
             pass the deck or fallback seed.
 
     Returns:

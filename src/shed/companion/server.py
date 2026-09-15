@@ -1,16 +1,3 @@
-"""Starting and stopping the companion from one Termux command.
-
-``python -m shed.companion`` has to behave well on a phone, which mostly means
-being predictable about four things: it prints the URL to open, it binds loopback
-unless told otherwise, it says plainly when the port is already taken instead of
-raising a traceback into a small terminal, and Ctrl-C stops it cleanly rather than
-leaving a socket held.
-
-Nothing here touches the game. The server is stateless, so stopping it loses
-nothing: the session lives in the browser, and reopening the page after a restart
-picks the game up where it was.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -50,8 +37,8 @@ def build_server(host: str, port: int, *, log_requests: bool = False) -> Threadi
 
     Raises:
         OSError: If the address cannot be bound. :func:`serve` turns the
-            already-in-use case into a readable message; other causes -- a host
-            that does not resolve, a privileged port -- surface as they are.
+            already-in-use case into a readable message; other causes, a host
+            that does not resolve, a privileged port, surface as they are.
     """
     handler = type("_BoundHandler", (CompanionHandler,), {"log_requests": log_requests})
     return ThreadingHTTPServer((host, port), handler)

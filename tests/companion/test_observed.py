@@ -258,7 +258,7 @@ def test_an_unproven_rank_comes_out_of_the_unknown_count() -> None:
 
 
 def test_a_pickup_is_refused_when_the_observed_ranks_could_have_been_played() -> None:
-    """``shed-v1`` has no voluntary pickup, and this is checkable for my own hand."""
+    """``standard`` has no voluntary pickup, and this is checkable for my own hand."""
     state = craft(
         my_hand=(Rank.ACE,),
         opponent_hand_unknown=1,

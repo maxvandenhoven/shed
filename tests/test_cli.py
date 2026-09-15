@@ -389,7 +389,7 @@ class TestSummaries:
         replay = decode_replay(roundtrip(match_document(sync_match(max_play_decisions=4))))
         lines = replay_summary(replay)
         assert lines[0].startswith("replay schema 1 |")
-        assert any("shed-v1 | 2 players" in line for line in lines)
+        assert any("standard | 2 players" in line for line in lines)
 
 
 class TestPlayCommand:
@@ -412,7 +412,7 @@ class TestPlayCommand:
 
         assert finished.returncode == 0, finished.stderr
         assert "deals to 2 seats" in finished.stdout
-        assert "shed-v1 | 2 players | deal seed 42" in finished.stdout
+        assert "standard | 2 players | deal seed 42" in finished.stdout
         assert str(output) in finished.stdout
         assert json.loads(output.read_text(encoding="utf-8"))["schema"] == 1
 

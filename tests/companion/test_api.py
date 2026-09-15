@@ -53,7 +53,7 @@ def test_health_reports_the_schema_and_the_profile() -> None:
     health = handle_api("/api/health", {})
     assert health["ok"] is True
     assert health["schema_version"] == COMPANION_SCHEMA_VERSION
-    assert health["rules"] == "shed-v1"
+    assert health["rules"] == "standard"
 
 
 def test_a_new_game_comes_back_with_a_document_and_a_recommendation() -> None:
@@ -169,7 +169,7 @@ def test_a_correction_then_advice_recovers_an_incomplete_join() -> None:
     )
     assert fixed["state"]["deck_count"] == 20
     assert fixed["recommendation"] is not None
-    assert fixed["history"][0]["text"] == "Correction recorded -- counted the deck"
+    assert fixed["history"][0]["text"] == "Correction recorded, counted the deck"
 
 
 def test_an_event_on_a_log_that_no_longer_folds_is_refused() -> None:

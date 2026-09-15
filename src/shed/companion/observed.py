@@ -1,33 +1,3 @@
-"""What a player can actually observe at a physical Shed table, and how it moves.
-
-The engine in :mod:`shed.engine` owns every card: it knows the deck order, both
-face-down assignments, and the opponent's hand, because it dealt them. Across a
-real table none of that is available, and this module is the model for that
-weaker position. It records ranks that were *seen* -- the cards in my own hand,
-both face-up sets, the pile, a revealed face-down card, a pile somebody took --
-and counts everything else. Nothing here ever converts a count into an identity:
-an unobserved card is stored as ``None`` in the pile or the burned collection, as
-:attr:`SeatObservation.hand_unknown` in a hand, or as a face-down tally, and it
-stays that way until the physical card is actually seen.
-
-Suits are absent by design rather than by omission. In the ``shed-v1`` profile
-suits never affect legality or strength, so a rank is the whole physical identity
-worth recording, and rank-only entry is all the phone interface ever asks for.
-
-The rules are not restated here. Rank legality, the constraint transition, the
-burn rule, batch generation, and the active-zone ordering are imported from
-:mod:`shed.engine` -- ``can_play_rank``, ``constraint_after``, ``burn_reason``,
-``legal_batches``, and ``active_zone_for_counts`` -- and the resolution order in
-:func:`apply_event` follows ``GameState._resolve_play``: move the cards, burn or
-apply the rank's effect, replenish, count the win, then schedule. When the
-profile changes, both callers change with it.
-
-A rejected observation never half-applies. Every state is a frozen dataclass and
-every reducer returns a new one, so a raised :class:`ObservationError` leaves the
-caller holding exactly the state it passed in -- which is what lets the phone
-interface keep the operator's input on screen next to the error.
-"""
-
 from __future__ import annotations
 
 from collections import Counter
@@ -165,7 +135,7 @@ class SeatObservation:
         player: The seat described.
         hand_known: Ranks certainly in that hand, ascending. For :data:`ME` this
             is the hand itself; for the opponent it is only what a public
-            transfer proved -- the ranks of a pile they picked up, minus what they
+            transfer proved, the ranks of a pile they picked up, minus what they
             have since played.
         hand_unknown: Cards in that hand whose rank has not been observed.
         face_up: The public face-up set, ascending.
@@ -216,7 +186,7 @@ class ObservedState:
     """The whole tracked position of a physical game.
 
     Attributes:
-        rules: The profile being played; only fixed ``shed-v1`` is supported.
+        rules: The profile being played; only fixed ``standard`` is supported.
         seats: One observation per seat, indexed by :data:`SEATS` order.
         deck_count: Cards left in the draw pile, or ``None`` when the operator
             has not counted it. ``None`` is a real state and not a placeholder
@@ -224,7 +194,7 @@ class ObservedState:
             resolved, so the reducer refuses to guess and
             :func:`advice_blockers` asks for the count.
         pile: The discard pile bottom to top. ``None`` marks a card that is
-            physically in the pile but whose rank was never seen -- the ordinary
+            physically in the pile but whose rank was never seen, the ordinary
             case when joining a game in progress.
         burned: Cards removed from the game by burns, in the order they left,
             with ``None`` for the same reason.
@@ -383,8 +353,8 @@ def validate_observed(state: ObservedState) -> None:
     no rank appears more often than the deck holds, the 54 cards are all somewhere
     when the deck has been counted, an empty pile carries no restriction, and the
     phase agrees with who is holding cards. The first four catch the mistakes
-    that actually happen at a table -- a miscount, a rank typed twice, a pile
-    entered without its unknown cards -- which is why they run after every event
+    that actually happen at a table, a miscount, a rank typed twice, a pile
+    entered without its unknown cards, which is why they run after every event
     rather than only at setup.
 
     Args:
@@ -539,7 +509,7 @@ def observed_legal_moves(state: ObservedState, player: PlayerId) -> tuple[Move, 
         indistinguishable, so every reveal is the same action.
 
     Raises:
-        ObservationError: If the position cannot answer the question -- the game
+        ObservationError: If the position cannot answer the question, the game
             is over, the deck has not been counted, or the seat holds nothing.
     """
     if state.is_finished:
@@ -585,7 +555,7 @@ def advice_blockers(state: ObservedState) -> tuple[Blocker, ...]:
     if state.is_finished:
         winner = state.winner
         name = SEAT_NAMES[winner] if winner is not None else "Nobody"
-        blockers.append(Blocker("finished", f"The game is over -- {name} went out."))
+        blockers.append(Blocker("finished", f"The game is over. {name} went out."))
         return tuple(blockers)
     if state.deck_count is None:
         blockers.append(
@@ -603,9 +573,7 @@ def advice_blockers(state: ObservedState) -> tuple[Blocker, ...]:
             )
         )
     if state.to_act != ME:
-        blockers.append(
-            Blocker("not_my_turn", "It is your opponent's turn -- record what they do.")
-        )
+        blockers.append(Blocker("not_my_turn", "It is your opponent's turn. Record what they do."))
     if not state.seat(ME).hand_fully_known and not state.pending:
         blockers.append(
             Blocker(
@@ -732,7 +700,7 @@ class CorrectState:
 
     A correction is never a silent rewrite: it joins the log like any other
     observation, so it replays, it appears in the history, and Undo removes it.
-    That is deliberate -- the state the companion shows is always the fold of a
+    That is deliberate, the state the companion shows is always the fold of a
     log the operator can read back.
 
     Attributes:
@@ -809,7 +777,7 @@ def _spend_from_hand(seat: SeatObservation, rank: Rank, count: int) -> SeatObser
 
     Spending the known copies first is the conservative reading of what was seen:
     if we knew the opponent held two sevens and they play one, one seven is still
-    proven to be there. It never invents the reverse -- a rank we never observed is
+    proven to be there. It never invents the reverse, a rank we never observed is
     taken out of the unknown count, not conjured into the known ranks and back out
     again.
 
@@ -868,8 +836,8 @@ def _spend_from_face_up(seat: SeatObservation, rank: Rank, count: int) -> SeatOb
 def _take_pile(state: ObservedState, player: PlayerId, extra: Rank | None) -> ObservedState:
     """Move the pile, and any card that failed a reveal, into one hand.
 
-    Known pile ranks join the taker's known ranks -- everybody at the table watched
-    them go down -- and unknown ones raise the taker's unknown count. For my own
+    Known pile ranks join the taker's known ranks, everybody at the table watched
+    them go down, and unknown ones raise the taker's unknown count. For my own
     hand those unknown cards become a pending entry, because I can see them and
     will type them in; for the opponent's they simply stay unknown.
 
@@ -915,7 +883,7 @@ def _resolve_pile(
 
     Returns:
         The position after the pile resolved, and the seat to act if the game
-        continues -- the same seat after a burn, the other one otherwise.
+        continues, the same seat after a burn, the other one otherwise.
     """
     if burn_reason(rank, count) is None:
         return replace(state, constraint=constraint_after(rank, state.constraint)), state.other(
@@ -1036,7 +1004,7 @@ def _apply_pickup(state: ObservedState, player: PlayerId) -> ObservedState:
 
     Raises:
         ObservationError: If the seat is in the face-down phase, holds nothing, or
-            is known to hold a card it could have played. ``shed-v1`` has no
+            is known to hold a card it could have played. ``standard`` has no
             voluntary pickup, and this is checked against the ranks actually
             observed: a hand with unknown cards is never assumed to have been
             playable, only one whose observed ranks prove it.
@@ -1057,8 +1025,8 @@ def _apply_pickup(state: ObservedState, player: PlayerId) -> ObservedState:
             sorted({RANK_TEXT[move.rank] for move in provable if isinstance(move, Play)})
         )
         raise ObservationError(
-            f"{SEAT_NAMES[player]} can play {playable} on this pile, and shed-v1 has "
-            "no voluntary pickup; fix the recorded cards if they are wrong"
+            f"{SEAT_NAMES[player]} can play {playable} on this pile, and there is "
+            "no voluntary pickup. Fix the recorded cards if they are wrong."
         )
     taken = _take_pile(state, player, extra=None)
     return _finish_turn(_refill(taken, player), player, state.other(player))
@@ -1229,9 +1197,9 @@ def new_game(
         my_face_up: My three face-up ranks.
         opponent_face_up: Their three face-up ranks.
         starting_player: Who actually played first at the table. The profile's
-            opener rule reads hidden hands, so it cannot be applied from here --
+            opener rule reads hidden hands, so it cannot be applied from here,
             and it does not need to be, because the table already decided.
-        rules: The profile; only fixed ``shed-v1`` is supported.
+        rules: The profile; only fixed ``standard`` is supported.
 
     Returns:
         The opening position.
@@ -1309,13 +1277,13 @@ def join_game(
         constraint: The restriction in force, which the operator reads off the
             table rather than deriving from a history the companion never saw.
         to_act: Who is to act.
-        rules: The profile; only fixed ``shed-v1`` is supported.
+        rules: The profile; only fixed ``standard`` is supported.
 
     Returns:
         The joined position.
 
     Raises:
-        ObservationError: If the counts cannot describe a real table -- a hand
+        ObservationError: If the counts cannot describe a real table, a hand
             smaller than its known ranks, a negative count, a rank recorded more
             often than the deck holds, or cards that do not add up to 54.
     """

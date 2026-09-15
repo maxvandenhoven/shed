@@ -1,23 +1,3 @@
-"""The JSON vocabulary the phone and the server share, and its decoder.
-
-Everything crossing the wire is decoded here, and decoding is the only place
-untyped data is checked. The engine deliberately assumes its annotations and
-validates domain invariants alone, so a browser sending ``"count": "two"`` or
-``"rank": "Z"`` has to be refused before any engine or reducer type is
-constructed. Every failure raises :class:`CompanionDataError` with a message
-naming the field, because those messages are what the interface shows.
-
-The wire format is a *document*, not a diff: a schema version, the versioned
-initial state, and the ordered observation log. The browser owns that document and
-stores it; the server holds no session state at all and simply folds the log it is
-given. That is what makes a Python restart invisible to a game in progress, and it
-is why the same decoder validates both a request body and a file the operator
-imported from a backup.
-
-Rank spellings are the ones :mod:`shed.companion.observed` uses on screen, so an
-exported file reads the way the phone does.
-"""
-
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
@@ -89,7 +69,7 @@ class CompanionDataError(ValueError):
 
     Decoding failures are told apart from
     :class:`~shed.companion.observed.ObservationError` on purpose: this one means
-    the payload was malformed -- a bad import, an old schema, a client bug -- while
+    the payload was malformed, a bad import, an old schema, a client bug, while
     that one means a well-formed observation contradicted the game.
     """
 
@@ -693,7 +673,7 @@ def encode_agent(choice: AgentChoice) -> dict[str, Any]:
     """Encode which agent advises a game.
 
     The label and the summary are encoded alongside the choice so a saved document
-    still says, in words, which strategy it was played with -- useful when it is
+    still says, in words, which strategy it was played with, useful when it is
     read back by a release whose agent list has moved on.
 
     Args:

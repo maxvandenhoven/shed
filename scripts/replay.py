@@ -1,23 +1,3 @@
-"""Summarize or verify a saved Shed replay.
-
-Usage from the repository root::
-
-    uv run scripts/replay.py results/match.json --verify
-
-Reading a replay is the untrusted direction: the file is decoded and validated
-by :mod:`shed.replay`, which rejects an unsupported schema or rules profile, a
-malformed shape, or a field of the wrong primitive type. ``--verify`` then deals
-the recorded deck and applies the recorded decisions through the engine,
-comparing events, outcome, and final position. No agent is built and no worker
-is started, so verification is deterministic and does not depend on the timing
-the match was played under.
-
-The console summary stays public by default: it reports private events by count,
-even though the file it reads holds their identities. ``--omniscient`` prints
-them instead, along with the position the match stopped in -- an operator view of
-an artifact that was always trusted, not a new capability.
-"""
-
 from __future__ import annotations
 
 import argparse

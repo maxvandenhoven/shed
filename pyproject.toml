@@ -26,6 +26,7 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "D"]
+ignore = ["D100", "D104"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"

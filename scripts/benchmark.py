@@ -1,26 +1,3 @@
-"""Measure what the Shed engine costs, on representative positions.
-
-Usage from the repository root::
-
-    uv run scripts/benchmark.py --iterations 10000
-
-The engine is measured alone. No worker process is started, no agent is built,
-and no acceptance deadline is waited on, because :mod:`shed.benchmark` does not
-import :mod:`shed.match` at all -- so a number printed here cannot include
-process startup or a timed wait. Four costs are reported separately: legal-move
-generation, an apply/undo pair, building one observation, and complete random
-playouts. The observation rows include legal-move generation for the acting
-seat, since ``observe`` fills ``PlayerView.legal_moves`` on every call; the
-legality rows above them are what that part costs on its own.
-
-Fixtures are discovered from seeded games, so the same ``--seed`` measures the
-same positions, and their sizes are printed before any duration. Nothing here is
-a performance gate: the tests assert the report's shape and never its timings.
-
-This file is an argument parser and nothing else. The fixtures and measurements
-live in :mod:`shed.benchmark`, and the console layout in :mod:`shed.cli`.
-"""
-
 from __future__ import annotations
 
 import argparse

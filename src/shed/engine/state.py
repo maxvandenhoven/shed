@@ -1,29 +1,3 @@
-"""Authoritative game state, immutable observations, and the game operations.
-
-``GameState`` is the engine's entry point. It holds every physical card,
-including hidden assignments and deck order, and exposes the operations a
-trusted caller needs: create a game, list the actor's legal moves, observe it as
-one player, apply a move, and undo it. ``PlayerView`` is the immutable
-projection an agent receives -- public cards, the viewer's own hand, and the
-moves that viewer may make.
-
-The deal helpers are split into a shuffle step and a pure dealing step so a
-replay can rebuild the identical opening position from a recorded deck order,
-without depending on the shuffle implementation staying byte-for-byte stable.
-
-Dependencies point one way: :mod:`shed.engine.types` defines the value types,
-:mod:`shed.engine.events` records what happened using those types, and this
-module builds state and operations on both. Nothing here imports agents, clocks,
-processes, or serialization.
-
-A decision is atomic. :meth:`GameState.apply_move` validates the move, snapshots
-the position, then resolves the whole chain -- transfer or reveal, burn or rank
-effect, pickup, replenishment, termination, and the next actor -- before
-returning. Any failure inside that boundary, including the closing invariant
-check, restores the snapshot, so a caller only ever sees the position before the
-decision or the position after it completes.
-"""
-
 from __future__ import annotations
 
 import random
@@ -451,7 +425,7 @@ class GameState:
                 metadata: never expose it to an agent.
             dealer: Dealing seat; deal, arrangement, and tie-break order all
                 start clockwise after it.
-            rules: Rules profile; only the fixed ``shed-v1`` profile is
+            rules: Rules profile; only the fixed ``standard`` profile is
                 supported.
 
         Returns:
@@ -485,7 +459,7 @@ class GameState:
 
         Raises:
             StateInvariantError: If the position is not a valid live decision
-                boundary -- no actor scheduled, a refill still owed, or an actor
+                boundary, no actor scheduled, a refill still owed, or an actor
                 who holds no cards at all.
         """
         if self.phase is Phase.FINISHED:
@@ -952,7 +926,7 @@ def legal_batches(
 
     This is the profile's batch legality, and the only implementation of it. It
     takes a tally rather than cards so a caller that observes ranks without
-    identities -- the phone companion tracking a physical game -- generates the
+    identities, the phone companion tracking a physical game, generates the
     same moves from the same rule, instead of reimplementing it and drifting.
 
     Args:
@@ -1019,7 +993,7 @@ def shuffled_deck(*, seed: int, config: RulesConfig = DEFAULT_RULES) -> list[Car
         The shuffled deck. The end of the list is the next card to be drawn.
 
     Raises:
-        ValueError: If the profile is not the fixed ``shed-v1`` profile.
+        ValueError: If the profile is not the fixed ``standard`` profile.
     """
     deck = list(build_deck(config))
     random.Random(seed).shuffle(deck)

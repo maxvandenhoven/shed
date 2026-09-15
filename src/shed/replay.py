@@ -1,45 +1,3 @@
-"""Versioned JSON replay: writing a finished match down, and playing it back.
-
-This module is the project's whole serialization boundary. Every JSON encoder
-and decoder lives here, so the engine, the agents, and the match runner keep
-working with typed domain objects and never learn that a file format exists.
-Nothing imports this module from inside those layers; it imports them.
-
-Two directions, deliberately asymmetric:
-
-* **Encoding** takes trusted typed records -- a :class:`~shed.match.MatchResult`
-  the runner just produced -- and writes explicitly tagged JSON. Every union is
-  tagged with a ``"type"`` field, every enum is stored by value, and no Python
-  pickle is involved: a replay is a readable artifact, not a serialized object
-  graph.
-* **Decoding** takes an untrusted document that merely claims to be a replay. It
-  validates shapes, tags, primitive types, required fields, and the supported
-  schema and profile *here*, then constructs the domain objects explicitly --
-  :class:`~shed.engine.Rank`, :class:`~shed.engine.Suit`, the identifier types,
-  :class:`~shed.engine.RulesConfig`, the moves. Those constructors check domain
-  invariants and never coerce, which is exactly why the coercion question has to
-  be settled before they are called. In particular ``True`` is not an integer
-  here, even though Python says it is: a JSON boolean in a count, a rank, or a
-  seat is rejected rather than silently played as a one.
-
-Legality is not this module's business. A decoded move is only well-formed; the
-engine decides whether it was playable, because :func:`verify_replay` replays it
-through :meth:`~shed.engine.GameState.apply_move` exactly as the runner did.
-
-Replay reconstructs the opening position from the recorded deck order with
-:func:`~shed.engine.deal_initial_state`, the same pure helper the runner deals
-with. Recording the order alongside the seed is what makes an old replay
-independent of any future change to the shuffle. Agents are never built: a
-replay reproduces the *recorded decisions*, not the search that chose them,
-which is why it is deterministic even though the timed match that produced it
-was not.
-
-A complete replay contains hidden information -- face-down identities, the deck
-order, and every private draw. It is a trusted post-match artifact. Never hand
-one to an agent, and never confuse it with the filtered history an observation
-carries.
-"""
-
 from __future__ import annotations
 
 import json
@@ -144,7 +102,7 @@ class ReplayFormatError(ValueError):
     It covers every rejection at this boundary: a malformed shape, a missing or
     wrongly typed field, an unknown tag, a value a domain constructor refuses,
     and an unsupported schema or rules profile. Illegal *play* is not a format
-    error -- :func:`verify_replay` reports that as a failed check instead.
+    error, :func:`verify_replay` reports that as a failed check instead.
     """
 
 
@@ -174,7 +132,7 @@ def _encode_cards(cards: Sequence[Card]) -> list[object]:
     """Encode a run of cards, preserving its order.
 
     Args:
-        cards: Cards in an order that matters -- pile order, transfer order, or
+        cards: Cards in an order that matters, pile order, transfer order, or
             the canonical deck order.
 
     Returns:
@@ -258,8 +216,8 @@ def encode_event(event: ObservedEvent) -> JsonObject:
 
     Full internal events are encoded, identities intact: a replay is a trusted
     artifact, and the recorded stream is what verification compares against. The
-    private events keep their ``cards`` field nullable, so a filtered copy --
-    the shape an agent would have seen -- encodes just as faithfully.
+    private events keep their ``cards`` field nullable, so a filtered copy,
+    the shape an agent would have seen, encodes just as faithfully.
 
     Args:
         event: The event to encode.
@@ -493,8 +451,8 @@ def detect_source_revision(start: Path | None = None) -> str | None:
 
     Recorded as provenance only. This reads ``.git`` directly rather than
     running a subprocess, which keeps process management out of the library. It
-    deliberately handles only the ordinary cases -- a ``.git`` directory with a
-    detached ``HEAD`` or a loose branch ref -- and reports nothing for a packed
+    deliberately handles only the ordinary cases, a ``.git`` directory with a
+    detached ``HEAD`` or a loose branch ref, and reports nothing for a packed
     ref, a worktree's ``.git`` file, or a tree that is not a repository at all.
 
     Args:
@@ -525,8 +483,8 @@ def match_deck(metadata: MatchMetadata) -> tuple[Card, ...]:
 
     The runner records the deal seed rather than the order, so this reproduces
     the order with the same shuffle it dealt with. The replay writer stores the
-    result explicitly; a caller that only wants to resolve card identifiers --
-    an omniscient console view of a match still in memory -- can use it directly.
+    result explicitly; a caller that only wants to resolve card identifiers,
+    an omniscient console view of a match still in memory, can use it directly.
 
     Args:
         metadata: How the match was set up.
@@ -821,7 +779,7 @@ def _build[T](path: str, factory: Callable[[], T]) -> T:
     """Construct a domain object, reporting its own validation at this path.
 
     The domain constructors raise :class:`ValueError` for a value that is
-    well-typed but impossible -- a negative slot, a duplicate arrangement, an
+    well-typed but impossible, a negative slot, a duplicate arrangement, an
     unknown agent kind, a modified profile. Those are format errors from a
     reader's point of view, so they are re-raised as one with the field path
     attached.
@@ -1062,7 +1020,7 @@ def decode_move(value: object, path: str = "move") -> Move:
 
     Raises:
         ReplayFormatError: If the tag is unknown, a field is missing or wrongly
-            typed -- a boolean count included -- or a move constructor refuses
+            typed, a boolean count included, or a move constructor refuses
             the values.
     """
     raw = _mapping(value, path)
@@ -1348,7 +1306,7 @@ def _decode_rules(value: object, path: str) -> RulesConfig:
 
     The profile identifier is checked before the object is built, so an unknown
     profile is refused by name rather than through a field comparison. The
-    profile's own validation then refuses a document that claims ``shed-v1``
+    profile's own validation then refuses a document that claims ``standard``
     while carrying different numbers.
 
     Args:

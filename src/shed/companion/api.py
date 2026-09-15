@@ -1,23 +1,3 @@
-"""The local HTTP surface: bundled assets and a stateless JSON API.
-
-The server is a pure function of the request. It keeps no session, no cache, and
-no file on disk: every endpoint takes the whole session document, folds it, and
-answers. What that buys is the reliability property the companion needs most --
-the Python process is disposable. Kill it mid-game, restart it, run it on a
-different port, and the browser resends the document it has been saving all along.
-
-Every asset is served from this package. There is no CDN, no remote font, no
-analytics, and nothing in the page reaches the network except ``fetch`` calls to
-this same origin, so a phone in aeroplane mode plays exactly as well as one with a
-signal. Assets are an explicit allowlist rather than a directory walk, which is
-both the traversal defence and the inventory.
-
-Responses set no CORS headers, so a page on another origin can post to this server
-but cannot read the answer. Combined with the server holding no state, there is
-nothing for a hostile page to steal or corrupt; the default bind is loopback
-regardless.
-"""
-
 from __future__ import annotations
 
 import json
@@ -101,7 +81,7 @@ def _reply(session: Session, payload: Mapping[str, Any]) -> dict[str, Any]:
     """Build the envelope every successful endpoint returns.
 
     The session travels back with the rendered screen so the browser's persistence
-    is one rule -- save whatever the last accepted reply carried -- whether the reply
+    is one rule, save whatever the last accepted reply carried, whether the reply
     came from loading, an observation, an undo, or a fresh setup.
 
     Args:
@@ -234,7 +214,7 @@ def handle_api(path: str, payload: Mapping[str, Any]) -> dict[str, Any]:
                 "schema_version": COMPANION_SCHEMA_VERSION,
                 "reads_schema_versions": sorted(READABLE_SCHEMA_VERSIONS),
                 "version": shed.__version__,
-                "rules": "shed-v1",
+                "rules": "standard",
             }
         case "/api/agents":
             # Driven by the package, never by a list here: an agent registered in
