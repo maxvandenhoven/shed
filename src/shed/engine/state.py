@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import random
 from collections import Counter
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, field, fields
 from itertools import combinations
@@ -77,21 +77,27 @@ from shed.engine.types import (
 )
 
 __all__ = [
+    "ALWAYS_PLAYABLE",
+    "BURN_BATCH_SIZE",
     "GameState",
     "PlayerState",
     "PlayerView",
     "SetupState",
+    "active_zone_for_counts",
+    "burn_reason",
     "can_play_rank",
+    "constraint_after",
     "deal_initial_state",
     "dealing_order",
+    "legal_batches",
     "shuffled_deck",
     "validate_decision_boundary",
 ]
 
-_ALWAYS_PLAYABLE: frozenset[Rank] = frozenset({Rank.TWO, Rank.NINE, Rank.TEN, Rank.JOKER})
+ALWAYS_PLAYABLE: frozenset[Rank] = frozenset({Rank.TWO, Rank.NINE, Rank.TEN, Rank.JOKER})
 """Ranks exempt from the current constraint, checked before any comparison."""
 
-_BURN_BATCH_SIZE = 4
+BURN_BATCH_SIZE = 4
 """Batch size that burns the pile when played in one action."""
 
 _OPENING_RANK_ORDER: tuple[Rank, ...] = (
@@ -131,7 +137,7 @@ def can_play_rank(rank: Rank, constraint: PlayConstraint) -> bool:
             below is exhaustive for ``PlayConstraint``; this guards a constraint
             added without updating it.
     """
-    if rank in _ALWAYS_PLAYABLE:
+    if rank in ALWAYS_PLAYABLE:
         return True
     match constraint:
         case Unrestricted():
@@ -143,7 +149,7 @@ def can_play_rank(rank: Rank, constraint: PlayConstraint) -> bool:
     raise ValueError(f"Unknown play constraint {constraint!r}")
 
 
-def _burn_reason(rank: Rank, count: int) -> BurnReason | None:
+def burn_reason(rank: Rank, count: int) -> BurnReason | None:
     """Report which rule, if any, burns the pile after a successful play.
 
     A ten burns whatever the batch size, and four cards of one rank burn when
@@ -160,12 +166,12 @@ def _burn_reason(rank: Rank, count: int) -> BurnReason | None:
     """
     if rank is Rank.TEN:
         return BurnReason.TEN
-    if count == _BURN_BATCH_SIZE:
+    if count == BURN_BATCH_SIZE:
         return BurnReason.FOUR_OF_A_KIND
     return None
 
 
-def _constraint_after(rank: Rank, current: PlayConstraint) -> PlayConstraint:
+def constraint_after(rank: Rank, current: PlayConstraint) -> PlayConstraint:
     """Return the constraint a successful, non-burning play leaves behind.
 
     The seven restriction lives in the constraint rather than in a countdown of
@@ -211,7 +217,7 @@ def _by_id(cards: Iterable[Card]) -> tuple[Card, ...]:
     return tuple(sorted(cards, key=lambda card: card.id))
 
 
-def _active_zone(
+def active_zone_for_counts(
     hand_count: int,
     face_up_count: int,
     face_down_count: int,
@@ -286,7 +292,9 @@ class PlayerState:
         Raises:
             StateInvariantError: If a refill is still pending.
         """
-        return _active_zone(len(self.hand), len(self.face_up), len(self.face_down), draw_count)
+        return active_zone_for_counts(
+            len(self.hand), len(self.face_up), len(self.face_down), draw_count
+        )
 
     def public(self, player: PlayerId) -> PublicPlayerState:
         """Project these cards onto what everybody may see.
@@ -814,9 +822,9 @@ class GameState:
             Who should decide next if the game continues: the same actor after a
             burn, otherwise the next seat clockwise.
         """
-        reason = _burn_reason(rank, count)
+        reason = burn_reason(rank, count)
         if reason is None:
-            self.constraint = _constraint_after(rank, self.constraint)
+            self.constraint = constraint_after(rank, self.constraint)
             return self._next_seat(actor)
 
         burned = tuple(self.discard_pile)
@@ -920,7 +928,11 @@ def _arrangements(player: PlayerState) -> tuple[Move, ...]:
 
 
 def _batches(cards: Sequence[Card], zone: Zone, constraint: PlayConstraint) -> tuple[Move, ...]:
-    """Enumerate the legal rank/count batches from one active zone.
+    """Enumerate the legal rank/count batches from one active zone's cards.
+
+    Physical cards reach legality only as a rank tally: suits never affect it,
+    and identities never do either, which is why the tally is what
+    :func:`legal_batches` takes.
 
     Args:
         cards: The cards available in that zone.
@@ -928,16 +940,43 @@ def _batches(cards: Sequence[Card], zone: Zone, constraint: PlayConstraint) -> t
         constraint: Restriction the pile currently imposes.
 
     Returns:
-        Every legal batch, ordered by rank then by count, or a forced pickup
-        when nothing in the zone is playable. Voluntary pickup does not exist in
-        this profile, so the two are never offered together.
+        Whatever :func:`legal_batches` generates for the tally of those cards.
     """
-    available = Counter(card.rank for card in cards)
+    return legal_batches(Counter(card.rank for card in cards), zone, constraint)
+
+
+def legal_batches(
+    available: Mapping[Rank, int], zone: Zone, constraint: PlayConstraint
+) -> tuple[Move, ...]:
+    """Enumerate the legal rank/count batches a rank tally offers.
+
+    This is the profile's batch legality, and the only implementation of it. It
+    takes a tally rather than cards so a caller that observes ranks without
+    identities -- the phone companion tracking a physical game -- generates the
+    same moves from the same rule, instead of reimplementing it and drifting.
+
+    Args:
+        available: How many cards of each rank the active zone holds. Ranks
+            mapped to zero or absent ranks contribute nothing.
+        zone: The zone the batches come from; hand or face-up.
+        constraint: Restriction the pile currently imposes.
+
+    Returns:
+        Every legal batch, ordered by rank then by count, or a forced pickup
+        when nothing in the tally is playable. Voluntary pickup does not exist in
+        this profile, so the two are never offered together.
+
+    Raises:
+        ValueError: If a tally entry is negative, which describes no zone.
+    """
     moves: list[Move] = []
     for rank in sorted(available):
+        count_available = available[rank]
+        if count_available < 0:
+            raise ValueError(f"Rank tally for {rank.name} is negative: {count_available}")
         if not can_play_rank(rank, constraint):
             continue
-        moves.extend(Play(zone, rank, count) for count in range(1, available[rank] + 1))
+        moves.extend(Play(zone, rank, count) for count in range(1, count_available + 1))
     if not moves:
         return (PickUp(),)
     return tuple(moves)

@@ -17,6 +17,16 @@ legality, the full PLAY transition -- effects, burns, pickups, blind reveals,
 replenishment, and termination -- and snapshot undo for all of them. Timing,
 processes, agents, replay, and the gauntlet are separate layers built on top and
 are not part of this package.
+
+The profile's individual rules are exported as well as applied: ``can_play_rank``,
+``constraint_after``, ``burn_reason``, ``legal_batches``, and
+``active_zone_for_counts`` are the engine's only implementations of rank
+legality, the constraint transition, the burn rule, batch generation, and the
+active-zone ordering. A caller that tracks a game the engine does not own --
+:mod:`shed.companion`, following a physical game from observed ranks -- calls
+these instead of restating them, so the two cannot drift. Each takes counts,
+ranks, and constraints rather than ``GameState``, which is what makes them usable
+without one.
 """
 
 from shed.engine.events import (
@@ -38,13 +48,19 @@ from shed.engine.events import (
     filter_events_for,
 )
 from shed.engine.state import (
+    ALWAYS_PLAYABLE,
+    BURN_BATCH_SIZE,
     GameState,
     PlayerState,
     PlayerView,
     SetupState,
+    active_zone_for_counts,
+    burn_reason,
     can_play_rank,
+    constraint_after,
     deal_initial_state,
     dealing_order,
+    legal_batches,
     shuffled_deck,
     validate_decision_boundary,
 )
@@ -79,6 +95,8 @@ from shed.engine.types import (
 )
 
 __all__ = [
+    "ALWAYS_PLAYABLE",
+    "BURN_BATCH_SIZE",
     "DEFAULT_DEALER",
     "DEFAULT_RULES",
     "ORDINARY_RANKS",
@@ -123,12 +141,16 @@ __all__ = [
     "UndoRecord",
     "Unrestricted",
     "Zone",
+    "active_zone_for_counts",
     "build_deck",
+    "burn_reason",
     "can_play_rank",
+    "constraint_after",
     "deal_initial_state",
     "dealing_order",
     "filter_event_for",
     "filter_events_for",
+    "legal_batches",
     "shuffled_deck",
     "validate_decision_boundary",
 ]

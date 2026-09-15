@@ -7,6 +7,11 @@ The full design contract lives in [`docs/implementation.md`](docs/implementation
 [`docs/agent-baselines.md`](docs/agent-baselines.md) records what the shipped baselines
 actually score and where a stronger agent should start.
 
+There is also a phone companion for games played with real cards:
+`python -m shed.companion` serves an offline page that tracks a physical
+two-player game and asks any of the shipped agents what it would play. See
+[`docs/companion.md`](docs/companion.md).
+
 ## Status
 
 The first release is complete: every requirement in
@@ -29,6 +34,8 @@ gates below pass on a clean checkout.
 | Versioned JSON replay, replay verification, `play` and `replay` commands | Implemented |
 | Sequential gauntlet: schedules, seed streams, accounting, `gauntlet` command | Implemented |
 | Engine benchmark and the `benchmark` command | Implemented |
+| Offline phone companion: observed state, agent adapter, local server, page | Implemented |
+| Companion agent picker over `AGENT_KINDS`, with per-agent explanations | Implemented |
 
 The engine works on strictly typed domain objects: constructors take a `Rank`,
 not an integer they convert into one, and check domain invariants only — `ty`
@@ -389,10 +396,12 @@ The review gates are the same commands with `ruff format --check .` in place of
 | `src/shed/replay.py` | Versioned JSON replay: the whole codec, and verification |
 | `src/shed/benchmark.py` | Engine-only benchmark: fixtures, measurements, report |
 | `src/shed/cli.py` | Shared command-line logic: lineups, narration, summaries |
+| `src/shed/companion/` | Offline phone companion: observed state, agent adapter, local server, bundled page |
 | `tests/` | pytest suite |
 | `scripts/` | Command-line entry points: `play.py`, `replay.py`, `gauntlet.py`, `benchmark.py` |
 | `docs/implementation.md` | Implementation specification |
 | `docs/agent-baselines.md` | What the shipped baselines score, and why |
+| `docs/companion.md` | Installing, running, and using the phone companion |
 | `results/` | Generated local outputs, ignored by Git |
 
 ## Commands
@@ -611,6 +620,69 @@ a bare apply during a playout costs about half of it. The specification predicte
 exactly that ("full-state snapshot undo … may dominate otherwise cheap
 operations. Benchmark before replacing them"), and it is where a future search
 should look first. Those figures are from one machine; run it on yours.
+
+## The phone companion
+
+For a game played with real cards across a table:
+
+```bash
+python -m shed.companion      # then open http://127.0.0.1:8000 in Chrome
+```
+
+It serves one page from this repository — no CDN, no remote font, no request off
+the device — that tracks a physical two-player game and shows what `GreedyAgent`
+would play. It is built for Termux on Android, but it runs anywhere Python 3.12
+does; [`docs/companion.md`](docs/companion.md) is the full walkthrough, including
+the Termux install and the Android battery settings that keep it running.
+
+The interesting constraint is that the companion **does not know the cards**. The
+engine deals, so it knows every hidden assignment; across a real table nobody
+does. `shed.companion.observed` therefore models what a player can actually
+observe — ranks that were seen, counts for everything else — and never converts a
+count into an identity. Your opponent's hand is a number plus whatever a public
+transfer proved. Face-down cards are a tally. A pile card you never saw stays
+`None`. When something needed is missing, the companion names the observation to
+record and withholds the recommendation rather than guessing at it.
+
+Two things keep that honest. The rules are not restated: legality, the constraint
+transition, the burn rule, batch generation, and the active-zone ordering are
+imported from `shed.engine` as `can_play_rank`, `constraint_after`,
+`burn_reason`, `legal_batches`, and `active_zone_for_counts`, each of which takes
+counts and ranks rather than a `GameState`. And the agent is given a
+`PlayerView` built strictly from observations: no unobserved card becomes a
+`Card`, and the identifiers and single suit such a view carries are bookkeeping
+the type demands, never a claim about a physical card. The agent is called
+directly in-process — the timed multiprocessing runner enforces a deadline on an
+adversarial strategy, which is not what a phone asking a one-pass heuristic for a
+hint needs.
+
+The game itself lives in the browser as a versioned document: the position you
+entered plus an ordered log of observations. The server folds that document and
+holds nothing, which is why stopping Python mid-game costs nothing — the page
+shows a reconnect banner, keeps the game and anything half-typed, and recovers
+by itself when the server comes back. Undo is the log minus its last entry,
+corrections are recorded entries rather than silent rewrites, and export is the
+document written out.
+
+Any agent the package builds can advise, chosen before the game starts and
+recorded in the document. The picker is driven by `AGENT_KINDS` rather than a
+list in the page, so a new agent shows up on the phone as soon as it is
+registered; the heading, the reasoning, and the caveat are all that agent's own,
+and a strategy the companion ships no description for says so rather than
+borrowing greedy's.
+
+That every agent *can* advise is checked, not assumed. Both baselines read only
+`legal_moves`, `hand`, `me.face_up` and `viewer`, all of which a companion-built
+view fills as truthfully as the engine does. The fields it cannot —
+`discard_pile` and `burned_cards` omit cards nobody saw, `history` is empty,
+`current_ply` and `dealer` were never observed — are named in
+`FAITHFUL_VIEW_FIELDS`, and a test traces every shipped agent's field accesses
+and fails if one reaches outside that set. A future agent that starts reading the
+pile therefore finds out, instead of quietly getting a thinner truth.
+
+The advice is still a baseline and is labelled as one on screen: greedy is one
+pass over the legal moves, biggest batch first, then the rank it least wants to
+keep. No card counting, no lookahead, no opponent model, and no win probability.
 
 ## Contributing
 
