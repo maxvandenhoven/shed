@@ -13,6 +13,8 @@ import json
 
 import pytest
 
+from shed.agents import AgentSpec
+from shed.companion.advice import DEFAULT_CHOICE, AgentChoice
 from shed.companion.codec import (
     CompanionDataError,
     decode_event,
@@ -39,6 +41,7 @@ from shed.companion.observed import (
 from shed.companion.session import (
     COMPANION_SCHEMA_VERSION,
     Session,
+    advice_seed,
     decode_session,
     derive,
     describe_event,
@@ -346,3 +349,76 @@ def test_a_win_is_rendered_as_a_finished_game() -> None:
     assert rendered["state"]["finished"] is True
     assert rendered["state"]["winner"] == "me"
     assert _fold(session).phase is Phase.FINISHED
+
+
+def test_a_version_1_document_is_upgraded_rather_than_refused() -> None:
+    """A schema bump must not cost somebody a game in progress.
+
+    Version 1 predates the agent picker, so the only strategy it could have been
+    played with is the default. Reading it as that, and rewriting it as the current
+    version, is what a version stamp is for.
+    """
+    state = craft(my_hand=(Rank.THREE, Rank.SEVEN), my_face_down=1, opponent_hand_unknown=2)
+    document = encode_session(session_for(state).appended(PlayCards(ME, Rank.THREE, 1)))
+    document["schema_version"] = 1
+    del document["agent"]
+
+    restored = decode_session(document)
+    assert restored.schema_version == COMPANION_SCHEMA_VERSION
+    assert restored.agent == DEFAULT_CHOICE
+    assert len(restored.events) == 1
+    assert encode_session(restored)["schema_version"] == COMPANION_SCHEMA_VERSION
+
+
+def test_the_chosen_agent_survives_a_json_round_trip() -> None:
+    """The choice is part of the document, so an export carries it too."""
+    state = craft(my_hand=(Rank.THREE,), opponent_hand_unknown=2, deck_count=5)
+    chosen = AgentChoice(spec=AgentSpec(kind="random", name="random"), seed=4242)
+    session = Session(COMPANION_SCHEMA_VERSION, state, (), chosen)
+    restored = decode_session(json.loads(json.dumps(encode_session(session))))
+    assert restored.agent == chosen
+    assert restored == session
+
+
+def test_the_chosen_agent_survives_appending_and_undoing() -> None:
+    """Every document the session hands back carries the same strategy."""
+    state = craft(my_hand=(Rank.THREE, Rank.SEVEN), my_face_down=1, opponent_hand_unknown=2)
+    chosen = AgentChoice(spec=AgentSpec(kind="random", name="random"))
+    session = Session(COMPANION_SCHEMA_VERSION, state, (), chosen)
+    played = session.appended(PlayCards(ME, Rank.THREE, 1))
+    assert played.agent == chosen
+    assert played.undone().agent == chosen
+
+
+def test_an_agent_the_release_does_not_ship_is_refused() -> None:
+    """An imported document naming an unknown strategy says which exist."""
+    state = craft(my_hand=(Rank.THREE,), opponent_hand_unknown=2, deck_count=5)
+    document = encode_session(session_for(state))
+    document["agent"] = {"kind": "minimax", "name": "minimax"}
+    with pytest.raises(CompanionDataError, match="not an agent this release ships"):
+        decode_session(document)
+
+
+def test_the_rendered_screen_names_the_strategy_that_answered() -> None:
+    """The heading is the chosen agent's, so no suggestion is mislabelled."""
+    state = craft(
+        my_hand=(Rank.THREE, Rank.SEVEN), my_face_down=1, opponent_hand_unknown=2, deck_count=5
+    )
+    chosen = AgentChoice(spec=AgentSpec(kind="random", name="random"))
+    rendered = render(Session(COMPANION_SCHEMA_VERSION, state, (), chosen))
+    assert rendered["agent"]["kind"] == "random"
+    assert rendered["agent"]["label"] == "Random"
+    assert rendered["recommendation"]["agent"]["kind"] == "random"
+    assert "not advice" in rendered["recommendation"]["caveat"]
+
+
+def test_the_seed_salt_reaches_the_agent_through_the_document() -> None:
+    """Two documents differing only in the salt can differ in their suggestion."""
+    state = craft(my_face_down=3, opponent_hand_unknown=2, deck_count=0)
+    plain = Session(COMPANION_SCHEMA_VERSION, state, (), AgentChoice(AgentSpec("random", "r")))
+    salted = Session(
+        COMPANION_SCHEMA_VERSION, state, (), AgentChoice(AgentSpec("random", "r"), seed=77)
+    )
+    assert advice_seed(plain) != advice_seed(salted)
+    assert render(plain)["recommendation"] is not None
+    assert render(salted)["recommendation"] is not None

@@ -19,6 +19,7 @@ from typing import Any
 
 import pytest
 
+from shed.agents import AGENT_KINDS
 from shed.companion.api import ASSETS, MAX_BODY_BYTES, handle_api
 from shed.companion.codec import CompanionDataError
 from shed.companion.observed import ObservationError
@@ -429,3 +430,103 @@ def test_a_bound_server_releases_its_port_on_close() -> None:
     finally:
         again.server_close()
     assert errno.EADDRINUSE  # The code the launcher translates into its message.
+
+
+def test_the_agent_catalogue_comes_from_the_package() -> None:
+    """The picker cannot fall behind the agents the package actually builds."""
+    catalogue = handle_api("/api/agents", {})
+    assert [entry["kind"] for entry in catalogue["agents"]] == list(AGENT_KINDS)
+    assert catalogue["default"] in AGENT_KINDS
+    for entry in catalogue["agents"]:
+        assert entry["label"] and entry["summary"] and entry["caveat"]
+
+
+def test_health_says_which_document_versions_it_reads() -> None:
+    """A page holding an older document can tell whether this server will take it."""
+    health = handle_api("/api/health", {})
+    assert health["schema_version"] == COMPANION_SCHEMA_VERSION
+    assert 1 in health["reads_schema_versions"]
+
+
+def test_a_new_game_records_the_chosen_agent() -> None:
+    """The choice is made at setup and stored with the game."""
+    reply = handle_api("/api/new", {**NEW_GAME, "agent": {"kind": "random", "name": "random"}})
+    assert reply["session"]["agent"]["kind"] == "random"
+    assert reply["agent"]["label"] == "Random"
+    assert reply["recommendation"]["agent"]["kind"] == "random"
+    assert "sampled uniformly" in reply["recommendation"]["reasoning"]
+
+
+def test_a_new_game_without_a_chosen_agent_uses_the_default() -> None:
+    """Never opening the picker gives the shedding baseline, not a failure."""
+    reply = handle_api("/api/new", NEW_GAME)
+    assert reply["agent"]["kind"] == "greedy"
+    assert (
+        "retention" in reply["recommendation"]["reasoning"]
+        or "only rank" in (reply["recommendation"]["reasoning"])
+    )
+
+
+def test_a_joined_game_records_the_chosen_agent() -> None:
+    """Both setup paths take a choice."""
+    reply = handle_api(
+        "/api/join",
+        {
+            "my_hand": ["3", "9"],
+            "my_face_up": ["5"],
+            "my_face_down": 2,
+            "opponent_hand_count": 3,
+            "opponent_hand_known": [],
+            "opponent_face_up": ["6"],
+            "opponent_face_down": 2,
+            "deck_count": 20,
+            "pile": [],
+            "constraint": {"kind": "unrestricted"},
+            "to_act": "me",
+            "agent": {"kind": "random", "name": "random", "seed": 11},
+        },
+    )
+    assert reply["session"]["agent"] == {
+        "kind": "random",
+        "name": "random",
+        "seed": 11,
+        "label": "Random",
+        "summary": reply["agent"]["summary"],
+        "caveat": reply["agent"]["caveat"],
+    }
+
+
+def test_the_chosen_agent_survives_every_later_request() -> None:
+    """Observations, undo, and a reload all keep the strategy the game was started with."""
+    started = handle_api("/api/new", {**NEW_GAME, "agent": {"kind": "random", "name": "random"}})
+    played = _event(started["session"], {"kind": "play", "player": "me", "rank": "3", "count": 1})
+    assert played["agent"]["kind"] == "random"
+    undone = handle_api("/api/undo", {"session": played["session"]})
+    assert undone["agent"]["kind"] == "random"
+    reloaded = handle_api("/api/state", {"session": json.loads(json.dumps(undone["session"]))})
+    assert reloaded["agent"]["kind"] == "random"
+
+
+def test_a_setup_naming_an_unknown_agent_is_refused() -> None:
+    """A typed or stale kind fails at setup rather than at the first suggestion."""
+    with pytest.raises(CompanionDataError, match="not an agent this release ships"):
+        handle_api("/api/new", {**NEW_GAME, "agent": {"kind": "mcts", "name": "mcts"}})
+
+
+def test_a_version_1_document_is_accepted_over_the_api() -> None:
+    """A game saved before the picker existed keeps working across the upgrade."""
+    started = handle_api("/api/new", NEW_GAME)
+    older = dict(started["session"])
+    older["schema_version"] = 1
+    older.pop("agent", None)
+    reloaded = handle_api("/api/state", {"session": older})
+    assert reloaded["session"]["schema_version"] == COMPANION_SCHEMA_VERSION
+    assert reloaded["agent"]["kind"] == "greedy"
+
+
+def test_the_agent_catalogue_is_reachable_before_a_game_exists(companion: str) -> None:
+    """The picker is drawn on the setup screen, which has no session to send."""
+    status, content_type, body = _get(companion, "/api/agents")
+    assert status == 200
+    assert content_type.startswith("application/json")
+    assert [entry["kind"] for entry in json.loads(body)["agents"]] == list(AGENT_KINDS)

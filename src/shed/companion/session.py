@@ -28,13 +28,21 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Any
 
-from shed.companion.advice import Recommendation, describe_move, recommend
+from shed.companion.advice import (
+    DEFAULT_CHOICE,
+    AgentChoice,
+    Recommendation,
+    describe_move,
+    recommend,
+)
 from shed.companion.codec import (
     RANK_BY_CODE,
     SEAT_CODE,
     CompanionDataError,
+    decode_agent,
     decode_event,
     decode_state,
+    encode_agent,
     encode_constraint,
     encode_event,
     encode_move,
@@ -72,6 +80,7 @@ from shed.engine import (
 
 __all__ = [
     "COMPANION_SCHEMA_VERSION",
+    "READABLE_SCHEMA_VERSIONS",
     "Derivation",
     "Session",
     "decode_session",
@@ -82,14 +91,26 @@ __all__ = [
     "revision",
 ]
 
-COMPANION_SCHEMA_VERSION = 1
-"""Version of the session document this release reads and writes.
+COMPANION_SCHEMA_VERSION = 2
+"""Version of the session document this release writes.
 
 The document is what survives a refresh, a restart, and an exported backup, so it
 is versioned separately from the replay schema in :mod:`shed.replay`: the two
 describe different things and will not change together. A document from a future
 version is refused with its number in the message rather than being read
 optimistically.
+
+Version 2 added the agent choice. Version 1 is still read -- see
+:data:`READABLE_SCHEMA_VERSIONS`.
+"""
+
+READABLE_SCHEMA_VERSIONS: frozenset[int] = frozenset({1, 2})
+"""Document versions :func:`decode_session` accepts.
+
+A version bump must not cost somebody a game in progress, which is the whole point
+of stamping one. A version 1 document has no agent choice, and the only agent it
+could have been played with is the default, so it upgrades by taking that -- and
+is rewritten as version 2 the first time the server answers about it.
 """
 
 
@@ -103,11 +124,17 @@ class Session:
         initial: The position the operator entered when tracking started -- a fresh
             deal after the physical swap, or a game already in progress.
         events: Every observation since, oldest first.
+        agent: Which strategy advises this game. It is chosen at setup and fixed
+            for the game, so a suggestion in the history always came from the
+            strategy the document names. It is part of the document rather than a
+            server setting, which is what keeps :func:`render` a pure function of
+            it and carries the choice through an export and back.
     """
 
     schema_version: int
     initial: ObservedState
     events: tuple[ObservationEvent, ...]
+    agent: AgentChoice = DEFAULT_CHOICE
 
     def appended(self, event: ObservationEvent) -> Session:
         """Return this session with one more observation on the end.
@@ -118,7 +145,7 @@ class Session:
         Returns:
             A new session; this one is unchanged.
         """
-        return Session(self.schema_version, self.initial, (*self.events, event))
+        return Session(COMPANION_SCHEMA_VERSION, self.initial, (*self.events, event), self.agent)
 
     def undone(self) -> Session:
         """Return this session with its last observation removed.
@@ -134,7 +161,7 @@ class Session:
         """
         if not self.events:
             raise ObservationError("There is nothing to undo")
-        return Session(self.schema_version, self.initial, self.events[:-1])
+        return Session(COMPANION_SCHEMA_VERSION, self.initial, self.events[:-1], self.agent)
 
 
 def encode_session(session: Session) -> dict[str, Any]:
@@ -147,9 +174,10 @@ def encode_session(session: Session) -> dict[str, Any]:
         A JSON-ready document.
     """
     return {
-        "schema_version": session.schema_version,
+        "schema_version": COMPANION_SCHEMA_VERSION,
         "initial": encode_state(session.initial),
         "events": [encode_event(event) for event in session.events],
+        "agent": encode_agent(session.agent),
     }
 
 
@@ -171,10 +199,10 @@ def decode_session(value: object, where: str = "session") -> Session:
     if not isinstance(value, dict):
         raise CompanionDataError(f"{where} must be an object")
     version = value.get("schema_version")
-    if version != COMPANION_SCHEMA_VERSION:
+    if version not in READABLE_SCHEMA_VERSIONS:
+        readable = ", ".join(str(known) for known in sorted(READABLE_SCHEMA_VERSIONS))
         raise CompanionDataError(
-            f"{where}.schema_version: this release reads version "
-            f"{COMPANION_SCHEMA_VERSION}, got {version!r}"
+            f"{where}.schema_version: this release reads version(s) {readable}, got {version!r}"
         )
     events = value.get("events", [])
     if not isinstance(events, list):
@@ -185,6 +213,7 @@ def decode_session(value: object, where: str = "session") -> Session:
         events=tuple(
             decode_event(item, f"{where}.events[{index}]") for index, item in enumerate(events)
         ),
+        agent=decode_agent(value.get("agent"), f"{where}.agent"),
     )
 
 
@@ -214,7 +243,9 @@ def advice_seed(session: Session) -> int:
 
     Seeding from the revision rather than from a clock makes a recommendation a
     function of the position: asking twice gives the same answer, and a screenshot
-    of a suggestion can be reproduced from the exported document.
+    of a suggestion can be reproduced from the exported document. The choice's own
+    salt is mixed in afterwards, so setting one changes the tie-break without
+    making the answer depend on anything but the document.
 
     Args:
         session: The session.
@@ -222,7 +253,7 @@ def advice_seed(session: Session) -> int:
     Returns:
         A non-negative seed.
     """
-    return int(revision(session).split("-", 1)[1], 16)
+    return session.agent.seed_for(int(revision(session).split("-", 1)[1], 16))
 
 
 @dataclass(frozen=True, slots=True)
@@ -440,6 +471,7 @@ def _recommendation_payload(recommendation: Recommendation) -> dict[str, Any]:
         reasoning, the rule effect, and the standing caveat.
     """
     return {
+        "agent": encode_agent(recommendation.agent),
         "move": encode_move(recommendation.move),
         "headline": recommendation.headline,
         "reasoning": recommendation.reasoning,
@@ -512,7 +544,7 @@ def render(session: Session) -> dict[str, Any]:
     recommendation: Recommendation | None = None
     if not blockers:
         try:
-            recommendation = recommend(state, seed=advice_seed(session))
+            recommendation = recommend(state, choice=session.agent, seed=advice_seed(session))
         except ObservationError as error:  # Refuse to guess rather than show a move.
             blockers = (*blockers, Blocker("unavailable", str(error)))
 
@@ -528,8 +560,9 @@ def render(session: Session) -> dict[str, Any]:
     opponent_most = len(opponent.face_up) if in_face_up else opponent.hand_count
     suggested = None if recommendation is None else recommendation.move
     return {
-        "schema_version": session.schema_version,
+        "schema_version": COMPANION_SCHEMA_VERSION,
         "revision": revision(session),
+        "agent": encode_agent(session.agent),
         "event_count": len(session.events),
         "applied": derivation.applied,
         "replay_error": derivation.error,

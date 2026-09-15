@@ -28,8 +28,10 @@ from pathlib import Path
 from typing import Any
 
 import shed
+from shed.companion.advice import DEFAULT_AGENT, agent_catalogue
 from shed.companion.codec import (
     CompanionDataError,
+    decode_agent,
     decode_constraint,
     decode_event,
     decode_optional_ranks,
@@ -44,6 +46,7 @@ from shed.companion.observed import (
 )
 from shed.companion.session import (
     COMPANION_SCHEMA_VERSION,
+    READABLE_SCHEMA_VERSIONS,
     Session,
     decode_session,
     derive,
@@ -138,6 +141,7 @@ def _new_session(payload: Mapping[str, Any]) -> Session:
             starting_player=decode_seat(payload.get("starting_player"), "starting_player"),
         ),
         events=(),
+        agent=decode_agent(payload.get("agent")),
     )
 
 
@@ -176,6 +180,7 @@ def _joined_session(payload: Mapping[str, Any]) -> Session:
             to_act=decode_seat(payload.get("to_act"), "to_act"),
         ),
         events=(),
+        agent=decode_agent(payload.get("agent")),
     )
 
 
@@ -227,8 +232,24 @@ def handle_api(path: str, payload: Mapping[str, Any]) -> dict[str, Any]:
             return {
                 "ok": True,
                 "schema_version": COMPANION_SCHEMA_VERSION,
+                "reads_schema_versions": sorted(READABLE_SCHEMA_VERSIONS),
                 "version": shed.__version__,
                 "rules": "shed-v1",
+            }
+        case "/api/agents":
+            # Driven by the package, never by a list here: an agent registered in
+            # shed.agents appears in the picker without a change to this file.
+            return {
+                "default": DEFAULT_AGENT,
+                "agents": [
+                    {
+                        "kind": profile.kind,
+                        "label": profile.label,
+                        "summary": profile.summary,
+                        "caveat": profile.caveat,
+                    }
+                    for profile in agent_catalogue()
+                ],
             }
         case "/api/state":
             return _reply(_session_from(payload), payload)
@@ -275,7 +296,7 @@ class CompanionHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802 - the name is BaseHTTPRequestHandler's.
         """Serve a bundled asset, or the health endpoint."""
         path = self.path.split("?", 1)[0]
-        if path == "/api/health":
+        if path in ("/api/health", "/api/agents"):
             self._send_json(HTTPStatus.OK, handle_api(path, {}))
             return
         asset = ASSETS.get(path)

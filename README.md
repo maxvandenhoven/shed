@@ -9,7 +9,7 @@ actually score and where a stronger agent should start.
 
 There is also a phone companion for games played with real cards:
 `python -m shed.companion` serves an offline page that tracks a physical
-two-player game and asks the greedy baseline what it would play. See
+two-player game and asks any of the shipped agents what it would play. See
 [`docs/companion.md`](docs/companion.md).
 
 ## Status
@@ -35,6 +35,7 @@ gates below pass on a clean checkout.
 | Sequential gauntlet: schedules, seed streams, accounting, `gauntlet` command | Implemented |
 | Engine benchmark and the `benchmark` command | Implemented |
 | Offline phone companion: observed state, agent adapter, local server, page | Implemented |
+| Companion agent picker over `AGENT_KINDS`, with per-agent explanations | Implemented |
 
 The engine works on strictly typed domain objects: constructors take a `Rank`,
 not an integer they convert into one, and check domain invariants only — `ty`
@@ -663,9 +664,25 @@ by itself when the server comes back. Undo is the log minus its last entry,
 corrections are recorded entries rather than silent rewrites, and export is the
 document written out.
 
-The advice is a greedy baseline and is labelled as one on screen: one pass over
-the legal moves, biggest batch first, then the rank it least wants to keep. No
-card counting, no lookahead, no opponent model, and no win probability.
+Any agent the package builds can advise, chosen before the game starts and
+recorded in the document. The picker is driven by `AGENT_KINDS` rather than a
+list in the page, so a new agent shows up on the phone as soon as it is
+registered; the heading, the reasoning, and the caveat are all that agent's own,
+and a strategy the companion ships no description for says so rather than
+borrowing greedy's.
+
+That every agent *can* advise is checked, not assumed. Both baselines read only
+`legal_moves`, `hand`, `me.face_up` and `viewer`, all of which a companion-built
+view fills as truthfully as the engine does. The fields it cannot —
+`discard_pile` and `burned_cards` omit cards nobody saw, `history` is empty,
+`current_ply` and `dealer` were never observed — are named in
+`FAITHFUL_VIEW_FIELDS`, and a test traces every shipped agent's field accesses
+and fails if one reaches outside that set. A future agent that starts reading the
+pile therefore finds out, instead of quietly getting a thinner truth.
+
+The advice is still a baseline and is labelled as one on screen: greedy is one
+pass over the legal moves, biggest batch first, then the rank it least wants to
+keep. No card counting, no lookahead, no opponent model, and no win probability.
 
 ## Contributing
 

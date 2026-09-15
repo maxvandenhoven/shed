@@ -13,8 +13,10 @@ The layers run one way and each does one thing:
   active-zone ordering from :mod:`shed.engine` rather than restating them, so the
   companion cannot drift from the engine the agent was written against.
 * :mod:`shed.companion.advice` builds a :class:`~shed.engine.PlayerView` from
-  observed information and calls :class:`~shed.agents.GreedyAgent` directly. No
-  unobserved card becomes a card; the timed multiprocessing runner is not involved.
+  observed information and calls the chosen agent directly -- any kind in
+  :data:`~shed.agents.AGENT_KINDS`, picked before the game starts and recorded in
+  the document. No unobserved card becomes a card; the timed multiprocessing
+  runner is not involved.
 * :mod:`shed.companion.codec` decodes and encodes the JSON the browser sends, which
   is the one place untyped external data is validated.
 * :mod:`shed.companion.session` is the recoverable document -- a versioned initial
@@ -31,7 +33,18 @@ Termux.
 Start it with ``python -m shed.companion`` and open ``http://127.0.0.1:8000``.
 """
 
-from shed.companion.advice import Recommendation, build_player_view, recommend
+from shed.companion.advice import (
+    AGENT_PROFILES,
+    DEFAULT_AGENT,
+    FAITHFUL_VIEW_FIELDS,
+    AgentChoice,
+    AgentProfile,
+    Recommendation,
+    agent_catalogue,
+    build_player_view,
+    profile_for,
+    recommend,
+)
 from shed.companion.codec import CompanionDataError, decode_event, decode_state
 from shed.companion.observed import (
     ME,
@@ -53,6 +66,7 @@ from shed.companion.observed import (
 from shed.companion.server import main, serve
 from shed.companion.session import (
     COMPANION_SCHEMA_VERSION,
+    READABLE_SCHEMA_VERSIONS,
     Session,
     decode_session,
     derive,
@@ -62,9 +76,15 @@ from shed.companion.session import (
 )
 
 __all__ = [
+    "AGENT_PROFILES",
     "COMPANION_SCHEMA_VERSION",
+    "DEFAULT_AGENT",
+    "FAITHFUL_VIEW_FIELDS",
     "ME",
     "OPPONENT",
+    "READABLE_SCHEMA_VERSIONS",
+    "AgentChoice",
+    "AgentProfile",
     "CompanionDataError",
     "CorrectState",
     "ObservationError",
@@ -77,6 +97,7 @@ __all__ = [
     "SeatObservation",
     "Session",
     "StatePatch",
+    "agent_catalogue",
     "apply_event",
     "build_player_view",
     "decode_event",
@@ -87,6 +108,7 @@ __all__ = [
     "join_game",
     "main",
     "new_game",
+    "profile_for",
     "recommend",
     "render",
     "revision",

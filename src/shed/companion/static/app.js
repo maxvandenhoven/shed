@@ -18,7 +18,11 @@
 "use strict";
 
 const RANKS = ["2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A", "JK"];
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
+/* A document stamped with an older version is still ours to send: the server
+ * upgrades it and hands back a current one. Refusing it here would strand a game
+ * that the Python side can read perfectly well. */
+const READABLE_SCHEMA_VERSIONS = [1, 2];
 const SESSION_KEY = "shed.companion.session.v1";
 const VIEW_KEY = "shed.companion.view.v1";
 const DRAFT_KEY = "shed.companion.draft.v1";
@@ -35,6 +39,8 @@ const app = {
   pickers: {},
   oppCount: null,
   myRank: null,
+  agents: [],
+  defaultAgent: "greedy",
 };
 
 /* ---------------------------------------------------------------- storage */
@@ -63,7 +69,7 @@ function readableSession(value) {
   return (
     value !== null &&
     typeof value === "object" &&
-    value.schema_version === SCHEMA_VERSION &&
+    READABLE_SCHEMA_VERSIONS.includes(value.schema_version) &&
     value.initial !== null &&
     typeof value.initial === "object" &&
     Array.isArray(value.events)
@@ -110,6 +116,7 @@ function restoreDraft() {
   });
   if (typeof draft.oppCount === "number") app.oppCount = draft.oppCount;
   document.querySelectorAll(".picker").forEach(drawPicker);
+  document.querySelectorAll(".agent-picker").forEach(drawAgentSummary);
 }
 
 /* ------------------------------------------------------------------ pickers */
@@ -245,6 +252,73 @@ function refreshReadiness() {
   drawOpponentCounts();
 }
 
+/* ------------------------------------------------------------- agent picker */
+
+/* The list comes from the package, not from this file: an agent registered in
+ * shed.agents shows up here without a change to the page. */
+async function loadAgents() {
+  try {
+    const response = await fetch("/api/agents");
+    const catalogue = await response.json();
+    app.agents = Array.isArray(catalogue.agents) ? catalogue.agents : [];
+    app.defaultAgent = catalogue.default || "greedy";
+  } catch (err) {
+    app.agents = [];
+  }
+  document.querySelectorAll(".agent-picker").forEach(buildAgentPicker);
+}
+
+function buildAgentPicker(fieldset) {
+  const panel = fieldset.dataset.agent;
+  const choices = fieldset.querySelector(".agent-choices");
+  choices.innerHTML = "";
+  if (!app.agents.length) {
+    fieldset.querySelector(".agent-summary").textContent =
+      "The agent list could not be loaded; the default strategy will be used.";
+    return;
+  }
+  app.agents.forEach((agent) => {
+    const label = document.createElement("label");
+    const radio = document.createElement("input");
+    radio.type = "radio";
+    radio.name = panel + "-agent";
+    radio.value = agent.kind;
+    radio.checked = agent.kind === app.defaultAgent;
+    radio.addEventListener("change", () => {
+      drawAgentSummary(fieldset);
+      saveDraft();
+    });
+    label.appendChild(radio);
+    label.appendChild(document.createTextNode(" " + agent.label));
+    choices.appendChild(label);
+  });
+  drawAgentSummary(fieldset);
+}
+
+function drawAgentSummary(fieldset) {
+  const chosen = agentKindFor(fieldset.dataset.agent);
+  const agent = app.agents.find((entry) => entry.kind === chosen);
+  fieldset.querySelector(".agent-summary").textContent = agent ? agent.summary : "";
+}
+
+function agentKindFor(panel) {
+  const checked = document.querySelector('input[name="' + panel + '-agent"]:checked');
+  return checked ? checked.value : app.defaultAgent;
+}
+
+/* The seed is a salt on the tie-break, never a requirement: a blank field means
+ * "whatever the position seeds", which is what almost everybody wants. */
+function agentChoiceFor(panel) {
+  const kind = agentKindFor(panel);
+  const choice = { kind: kind, name: kind };
+  const raw = document.getElementById(panel + "-agent-seed");
+  if (raw && raw.value.trim() !== "") {
+    const seed = Number(raw.value);
+    if (Number.isInteger(seed) && seed >= 0) choice.seed = seed;
+  }
+  return choice;
+}
+
 /* --------------------------------------------------------------- networking */
 
 function setBusy(busy) {
@@ -375,6 +449,8 @@ function render() {
     app.shownRevision = view.revision;
   }
 
+  const agent = view.agent || {};
+  text("rec-title", (agent.label || "Agent") + " recommendation");
   showError("replay-error", view.replay_error || "");
   renderPending(state);
   renderRecommendation(view);
@@ -405,8 +481,12 @@ function renderRecommendation(view) {
     blocked.hidden = true;
     const rec = view.recommendation;
     text("rec-headline", rec.headline);
-    text("rec-reasoning", rec.reasoning + " It compared " + rec.considered + " legal option(s).");
+    text("rec-reasoning", rec.reasoning);
     text("rec-effect", rec.effect);
+    text(
+      "rec-considered",
+      "Chose among " + rec.considered + " legal action" + (rec.considered === 1 ? "" : "s") + "."
+    );
     text("rec-caveat", rec.caveat);
     const notes = document.getElementById("rec-notes");
     notes.innerHTML = "";
@@ -749,6 +829,7 @@ function wire() {
         my_face_up: picked("new-my-face-up"),
         opponent_face_up: picked("new-opp-face-up"),
         starting_player: document.querySelector('input[name="new-starter"]:checked').value,
+        agent: agentChoiceFor("new"),
       },
       "new-error"
     );
@@ -773,6 +854,7 @@ function wire() {
         pile: pile,
         constraint: constraintFromForm(),
         to_act: document.querySelector('input[name="join-to-act"]:checked').value,
+        agent: agentChoiceFor("join"),
       },
       "join-error"
     );
@@ -917,8 +999,9 @@ function wire() {
   document.getElementById("offline").dataset.keepEnabled = "true";
 }
 
-function start() {
+async function start() {
   wire();
+  await loadAgents();
   restoreDraft();
   const saved = load(SESSION_KEY);
   const savedView = load(VIEW_KEY);

@@ -162,6 +162,8 @@ textarea { min-height: 8em; font-family: ui-monospace, SFMono-Regular, Menlo, mo
 .choices label { display: flex; align-items: center; gap: 6px; min-height: var(--tap); color: var(--ink); }
 .inline { display: flex; align-items: center; gap: 6px; margin-top: 8px; color: var(--ink); }
 input[type="radio"], input[type="checkbox"] { width: 22px; height: 22px; }
+.agent-picker .choices { flex-direction: column; align-items: stretch; gap: 4px; }
+.agent-picker .agent-summary { margin: 2px 0 10px; }
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0 10px; }
 
 /* ---- messages ---- */

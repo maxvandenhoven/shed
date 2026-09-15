@@ -20,7 +20,8 @@
 <!-- ========================= SETUP ========================= -->
 <main id="setup" hidden>
   <h1>Shed companion</h1>
-  <p class="lede">Track a real two-player game and see what the greedy agent would play.</p>
+  <p class="lede">Track a real two-player game with physical cards, and see what one of
+    the project's agents would play.</p>
 
   <div class="tabs" role="tablist">
     <button type="button" class="tab" data-panel="setup-new" role="tab" aria-selected="true">New game</button>
@@ -47,6 +48,16 @@
         <label><input type="radio" name="new-starter" value="me" checked> You</label>
         <label><input type="radio" name="new-starter" value="opponent"> Opponent</label>
       </div>
+    </fieldset>
+    <fieldset class="field agent-picker" data-agent="new">
+      <legend>Advice from</legend>
+      <div class="choices agent-choices"></div>
+      <p class="hint agent-summary"></p>
+      <label class="field">Tie-break seed (optional)
+        <input type="number" id="new-agent-seed" min="0" inputmode="numeric"
+               placeholder="leave blank for the default">
+        <span class="hint">Only changes which way a tie is broken, never the position.</span>
+      </label>
     </fieldset>
     <button type="button" class="primary big" id="start-new">Start tracking</button>
     <p class="error" id="new-error" hidden></p>
@@ -103,6 +114,16 @@
         <label><input type="radio" name="join-to-act" value="opponent"> Opponent's</label>
       </div>
     </fieldset>
+    <fieldset class="field agent-picker" data-agent="join">
+      <legend>Advice from</legend>
+      <div class="choices agent-choices"></div>
+      <p class="hint agent-summary"></p>
+      <label class="field">Tie-break seed (optional)
+        <input type="number" id="join-agent-seed" min="0" inputmode="numeric"
+               placeholder="leave blank for the default">
+        <span class="hint">Only changes which way a tie is broken, never the position.</span>
+      </label>
+    </fieldset>
     <button type="button" class="primary big" id="start-join">Start tracking</button>
     <p class="error" id="join-error" hidden></p>
   </section>
@@ -136,11 +157,12 @@
   </section>
 
   <section id="rec" class="card">
-    <h2>Greedy recommendation</h2>
+    <h2 id="rec-title">Recommendation</h2>
     <div id="rec-body" hidden>
       <p class="headline" id="rec-headline">—</p>
       <p id="rec-reasoning" class="reason"></p>
       <p id="rec-effect" class="reason"></p>
+      <p id="rec-considered" class="hint"></p>
       <button type="button" class="primary big" id="rec-played">I played this</button>
       <ul id="rec-notes" class="notes"></ul>
       <p id="rec-caveat" class="caveat"></p>

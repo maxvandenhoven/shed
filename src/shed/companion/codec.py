@@ -23,6 +23,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from shed.agents import AGENT_KINDS, AgentSpec
+from shed.companion.advice import DEFAULT_CHOICE, AgentChoice, profile_for
 from shed.companion.observed import (
     ME,
     OPPONENT,
@@ -60,10 +62,12 @@ __all__ = [
     "CompanionDataError",
     "RANK_BY_CODE",
     "SEAT_BY_CODE",
+    "decode_agent",
     "decode_constraint",
     "decode_event",
     "decode_rank",
     "decode_state",
+    "encode_agent",
     "encode_constraint",
     "encode_event",
     "encode_move",
@@ -683,3 +687,68 @@ def decode_event(value: object, where: str = "event") -> ObservationEvent:
         f"{where}.kind: {kind!r} is not an observation; use play, pickup, reveal, "
         "record, or correct"
     )
+
+
+def encode_agent(choice: AgentChoice) -> dict[str, Any]:
+    """Encode which agent advises a game.
+
+    The label and the summary are encoded alongside the choice so a saved document
+    still says, in words, which strategy it was played with -- useful when it is
+    read back by a release whose agent list has moved on.
+
+    Args:
+        choice: The chosen strategy and its tie-break salt.
+
+    Returns:
+        A JSON-ready object.
+    """
+    profile = choice.profile
+    return {
+        "kind": choice.spec.kind,
+        "name": choice.spec.name,
+        "seed": choice.seed,
+        "label": profile.label,
+        "summary": profile.summary,
+        "caveat": profile.caveat,
+    }
+
+
+def decode_agent(value: object, where: str = "agent") -> AgentChoice:
+    """Decode which agent advises a game.
+
+    The descriptive fields :func:`encode_agent` writes are deliberately ignored on
+    the way back: they are a record of what an earlier release said, and this one
+    re-derives them from the package so a renamed or re-described strategy is not
+    frozen into old documents.
+
+    Args:
+        value: The agent object, or ``None`` for the default choice.
+        where: Field path, for the message.
+
+    Returns:
+        The choice.
+
+    Raises:
+        CompanionDataError: If a field is the wrong shape, or the kind is not one
+            this release ships. The message lists the kinds that exist, because an
+            imported document is the likeliest source of one that does not.
+    """
+    if value is None:
+        return DEFAULT_CHOICE
+    payload = _mapping(value, where)
+    kind = _text(payload.get("kind"), f"{where}.kind")
+    if kind not in AGENT_KINDS:
+        raise CompanionDataError(
+            f"{where}.kind: {kind!r} is not an agent this release ships; "
+            f"use one of {', '.join(AGENT_KINDS)}"
+        )
+    seed = payload.get("seed")
+    if seed is not None:
+        seed = _integer(seed, f"{where}.seed", minimum=0)
+    name = payload.get("name", kind)
+    try:
+        spec = AgentSpec(kind=kind, name=_text(name, f"{where}.name"))
+    except ValueError as error:
+        raise CompanionDataError(f"{where}: {error}") from error
+    profile_for(kind)  # Refuses a kind the companion cannot even name.
+    return AgentChoice(spec=spec, seed=seed)

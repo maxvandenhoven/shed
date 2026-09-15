@@ -9,6 +9,7 @@ python -m shed.companion      # then open http://127.0.0.1:8000 in Chrome
 ```
 
 - [What it is, and what it is not](#what-it-is-and-what-it-is-not)
+- [Choosing the agent](#choosing-the-agent)
 - [Set up Termux](#set-up-termux)
 - [Install Python, Git, and this repository](#install-python-git-and-this-repository)
 - [Start, stop, and restart](#start-stop-and-restart)
@@ -23,8 +24,8 @@ python -m shed.companion      # then open http://127.0.0.1:8000 in Chrome
 ## What it is, and what it is not
 
 It is a scorekeeper with an opinion. You play with real cards; you record what
-happens; it keeps the position and asks `GreedyAgent` — the same baseline the
-gauntlet measures — what it would do from there.
+happens; it keeps the position and asks one of the project's agents — the same
+ones the gauntlet measures — what it would do from there.
 
 It never deals, never shuffles, and never invents a card. Your opponent's hand is
 a number. Face-down cards are a count. A pile card you never saw stays unrecorded.
@@ -34,6 +35,66 @@ guessing, and withholds the recommendation until you record it.
 There is no camera recognition, no cloud, no account, and no APK. Nothing you
 enter leaves the phone: after the one-time install, the whole thing works in
 aeroplane mode.
+
+## Choosing the agent
+
+Both setup forms have an **Advice from** picker listing every agent the installed
+package builds, with a line saying what each one does. The list is read from
+`shed.agents.AGENT_KINDS` at runtime rather than written into the page, so an
+agent added to the package appears in the picker without touching the companion.
+
+Today that is:
+
+| Agent | What it does |
+| --- | --- |
+| **Greedy** (default) | Sheds as many cards as it can, then spends the rank it least wants to keep, from a fixed retention table. |
+| **Random** | Samples uniformly among the legal actions. A floor to measure against, not advice. |
+
+The recommendation panel is labelled with whichever you picked — *Greedy
+recommendation*, *Random recommendation* — and both the reasoning and the caveat
+are that agent's own. Greedy explains a batch in terms of the two keys it
+actually sorts by; random says plainly that it compared nothing. An agent the
+companion ships no description for still works, and says so instead of borrowing
+somebody else's explanation.
+
+**Tie-break seed** is optional and almost never needed. A suggestion is normally
+seeded from the position itself, so asking twice about one position gives one
+answer and a screenshot can be reproduced from the exported document. Setting a
+seed salts that, which shakes loose a different arbitrary choice without changing
+anything about the position. It is worth something for the random baseline; in
+greedy it is visible only between interchangeable face-down cards.
+
+The choice is made **before the game starts** and is recorded in the session
+document, so it survives a reload, a server restart, and an export/import round
+trip — a suggestion in the history always came from the strategy the document
+names. To play the same game with a different agent, export it, start a new game
+with the other agent, and import.
+
+### Can every agent advise on an observed game?
+
+Yes for both agents that exist, and that is checked rather than assumed. The
+whole abstraction is `Agent.think(view, turn)`, and the shipped baselines read
+exactly four things from the view: `legal_moves`, `hand`, `me.face_up`, and
+`viewer`. All four a companion-built view fills as truthfully as the engine does.
+
+The honest caveat is about agents that do not exist yet. A view built from
+observations is *thinner* than one built from a `GameState`, and no amount of
+care fixes that:
+
+| View field | In an observed game |
+| --- | --- |
+| `discard_pile`, `burned_cards` | Carry only the cards whose ranks were seen, so they understate those piles whenever the table status reports unseen cards. |
+| `players[…].hand_count` | Exact. But an opponent's *known* ranks are dropped: `PublicPlayerState` has nowhere to put a partly-known hand. |
+| `history` | Empty. The companion keeps its own observation log; the engine's event vocabulary cannot express "a card moved and nobody saw it". |
+| `current_ply`, `dealer` | Not observed. The companion joins after the deal. |
+| `Arrange` moves | Never generated. The hand/table swap happens physically before tracking starts. |
+
+`shed.companion.advice.FAITHFUL_VIEW_FIELDS` names the fields that *are* honest,
+and `tests/companion/test_agents.py` traces every shipped agent's field accesses
+and fails if one reads outside that set. So a future agent that starts consulting
+the pile will not silently get a thinner truth — the test will say so, and whoever
+adds it can decide what the companion should do about it. `view_gaps()` already
+reports the same gaps to the operator, under the suggestion.
 
 ## Set up Termux
 
@@ -238,23 +299,31 @@ pip install . --upgrade     # only needed if you installed rather than using PYT
 Then **hard-reload the page** in Chrome (pull down to refresh; the server sends
 `Cache-Control: no-store`, so a plain reload is normally enough).
 
-Your saved game is not touched by an update. It carries a schema version, and a
-version this release cannot read is refused rather than half-understood — the
-page then offers the unreadable data for you to copy before you start a new game.
-Export a running game before pulling if it matters to you.
+Your saved game is not touched by an update. It carries a schema version; older
+versions this release still knows how to read are upgraded in place (a document
+written before the agent picker existed reads as a greedy game and is rewritten
+on the first reply), and a version it cannot read is refused rather than
+half-understood — the page then offers the unreadable data for you to copy before
+you start a new game. `GET /api/health` lists the versions the running server
+accepts. Export a running game before pulling if it matters to you.
 
 To update Termux's own packages, `pkg upgrade`. Do that when you are not
 mid-game: it can restart the shell.
 
 ## Limitations
 
-**The advice is a greedy baseline, and nothing more.** `GreedyAgent` makes one
-pass over the legal moves and scores them on two things: shed as many cards as
-possible, then spend the rank it least wants to keep, from a fixed retention
+**The advice is a baseline, and nothing more.** `GreedyAgent`, the default, makes
+one pass over the legal moves and scores them on two things: shed as many cards
+as possible, then spend the rank it least wants to keep, from a fixed retention
 table. It does not count cards, read the pile, look ahead, or model your
 opponent. It is the floor a stronger agent should beat, not a solver.
-[`docs/agent-baselines.md`](agent-baselines.md) is what it actually scores. No
-win probability is shown, because there is nothing here that could compute one.
+[`docs/agent-baselines.md`](agent-baselines.md) is what the baselines actually
+score. No win probability is shown, because there is nothing here that could
+compute one.
+
+**The agent is fixed once a game starts.** Switching mid-game would make the
+history ambiguous about which strategy suggested what, so the picker is on the
+setup screen only; export and re-import to change it.
 
 **Observations are only as good as what you record.** The companion cannot see
 the table. If you forget to record a move, the position drifts and it may start
@@ -281,10 +350,11 @@ browser you entered it on.
   `active_zone_for_counts`) rather than restated, so the companion and the engine
   cannot drift apart.
 - `src/shed/companion/advice.py` — builds a `PlayerView` from observed
-  information and calls `GreedyAgent` directly, in this process. The timed
+  information and calls the chosen agent directly, in this process. The timed
   multiprocessing runner is not involved. No unobserved card becomes a `Card`;
   the identifiers and the single suit the view carries are bookkeeping the type
-  demands, not claims about physical cards.
+  demands, not claims about physical cards. It also owns the agent catalogue,
+  the per-agent explanations, and `FAITHFUL_VIEW_FIELDS`.
 - `src/shed/companion/codec.py` — the JSON vocabulary, and the only place untyped
   external data is validated.
 - `src/shed/companion/session.py` — the session document (a versioned initial
@@ -309,10 +379,14 @@ Everything described here was developed and verified **on desktop Linux**:
   a recommendation is legal and changes nothing.
 - The server driven over HTTP: bundled assets, status codes, the body limit, an
   occupied port, and a clean shutdown.
+- Every agent the package builds, over positions covering a hand batch, a face-up
+  batch, a blind reveal and a forced pickup, with a field-access trace asserting
+  none of them reads a view field an observed game cannot fill faithfully.
 - The page driven in headless Chromium at a 390×844 phone viewport, through
   setup → recommendation → *I played this* → recording a drawn rank → the
   opponent's action → undo → reload, plus joining a game, a rejected correction
-  and a good one, export and re-import, and the blind-reveal path. The server was
+  and a good one, export and re-import, the blind-reveal path, and picking a
+  non-default agent and confirming the choice survives a reload. The server was
   killed mid-game to confirm the reconnect banner appears, the game and the typed
   input survive, and it recovers by itself when the server returns.
 

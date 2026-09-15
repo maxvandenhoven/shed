@@ -169,7 +169,13 @@ ranks, and constraints rather than a `GameState`; a change to any of them is a
 change to both callers. Second, it never fabricates a hidden card to satisfy an
 engine signature: it builds a `PlayerView` from observed information alone,
 leaving unobserved cards out as counts, and calls an agent directly rather than
-through the timed runner. It depends on `engine` and `agents` and on nothing else
+through the timed runner. That view is honest about the fields listed in
+`shed.companion.advice.FAITHFUL_VIEW_FIELDS` and thinner than the engine's
+everywhere else, which is a constraint on future agents as much as on the
+companion: a strategy that comes to depend on `discard_pile`, `burned_cards`,
+`history`, `current_ply`, or `dealer` is reading an observed game as though it
+were an omniscient one, and `tests/companion/test_agents.py` fails when one
+starts to. It depends on `engine` and `agents` and on nothing else
 in the package -- not `match`, not `replay`, not `cli` -- and on no third-party
 package at all.
 
