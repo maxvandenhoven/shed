@@ -1,20 +1,3 @@
-"""Observed events, per-recipient filtering, and the transition/undo shape.
-
-Events are the only record of what happened. The engine produces *full* events
-that retain hidden identities; those are for trusted callers such as the match
-runner and the replay writer. Before an event reaches an agent it passes through
-:func:`filter_events_for`, which strips identities the recipient may not know
-while keeping the counts everybody can see.
-
-History itself lives in the runner, outside ``GameState``: growing history must
-never enter an undo snapshot or a replay's state records.
-
-This module depends only on :mod:`shed.engine.types`. ``UndoRecord`` names
-``GameState`` in an annotation alone, under a ``TYPE_CHECKING`` import with
-postponed annotations, so ``state.py`` can import these records at runtime
-without a cycle.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass

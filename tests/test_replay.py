@@ -514,7 +514,7 @@ class TestDocument:
         document = match_document(sync_match(), source_revision="deadbeef")
         assert document["schema"] == 1
         assert document["rules"] == {
-            "id": "shed-v1",
+            "id": "standard",
             "min_players": 2,
             "max_players": 5,
             "joker_count": 2,

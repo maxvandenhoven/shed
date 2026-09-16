@@ -205,7 +205,7 @@ def run_spawned_decision(
 def assert_reaped(decision: SpawnedDecision, *, signalled: bool | None = None) -> None:
     """Assert the decision's worker stopped and was reaped.
 
-    An exit status is the robust evidence here. ``_shutdown_worker`` only reads
+    An exit status is the reliable evidence here. ``_shutdown_worker`` only reads
     it after joining, and it closes the process handle, which raises unless the
     process has actually stopped -- so a status at all means the worker is gone.
     Checking the PID directly would be racy under ``forkserver``, where the

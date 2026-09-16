@@ -1,39 +1,3 @@
-"""Asking an agent what to do, from observed information alone.
-
-The agent interface takes a :class:`~shed.engine.PlayerView`, which the engine
-normally builds from a ``GameState`` that knows every card. There is no such state
-here, so this module builds the view from :class:`~shed.companion.observed.
-ObservedState` instead, and the whole point of it is what it refuses to do:
-no unobserved card becomes a :class:`~shed.engine.Card`. The opponent's hand
-reaches the view as ``hand_count``, face-down cards as slot identifiers with no
-identities, and a pile or burned card whose rank was never seen is left out of the
-view's card tuples rather than filled in with a plausible one.
-
-Two kinds of made-up value would be easy to confuse, so they are named apart.
-A *bookkeeping* identifier or suit is arbitrary by construction and carries no
-claim: :class:`~shed.engine.Card` needs an ID and, for an ordinary rank, a suit,
-while ``shed-v1`` makes both irrelevant to legality and to strength. A *fabricated
-identity* would be a claim about a physical card nobody looked at, and this module
-never makes one. :data:`BOOKKEEPING_SUIT` is therefore the same suit on every
-card the view carries, which is the clearest possible signal that it means
-nothing.
-
-The agent is called in this process, directly. The timed runner in
-:mod:`shed.match` spawns a worker per decision to enforce a deadline on an
-adversarial strategy; a phone asking a one-pass heuristic for a hint needs neither,
-and a fork per tap would be the slowest part of the interface.
-
-Any kind in :data:`~shed.agents.AGENT_KINDS` can be asked, because a view built
-here satisfies the part of the ``PlayerView`` contract an agent can rely on. Which
-part that is, is written down in :data:`FAITHFUL_VIEW_FIELDS` and enforced by a
-test, because the rest of the contract is the interesting half: an observed game
-genuinely cannot fill ``discard_pile``, ``burned_cards``, ``history``,
-``current_ply`` or ``dealer`` the way a ``GameState`` can, and an agent that came
-to depend on one of those would be reading a thinner truth than it thinks. Both
-shipped baselines read only faithful fields; :func:`view_gaps` reports the rest
-to the operator rather than hiding it.
-"""
-
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -92,8 +56,8 @@ FAITHFUL_VIEW_FIELDS: frozenset[str] = frozenset(
 """The ``PlayerView`` fields a companion-built view fills as truthfully as the engine.
 
 ``hand`` is exact because :func:`build_player_view` refuses to build a view whose
-own hand has unrecorded ranks. ``players`` is exact in the counts it promises --
-hand size, the public face-up set, one slot per remaining face-down card -- and
+own hand has unrecorded ranks. ``players`` is exact in the counts it promises,
+hand size, the public face-up set, one slot per remaining face-down card, and
 ``PublicPlayerState`` promises nothing more about an opponent's hand than its size.
 ``legal_moves`` comes from the engine's own generator over observed counts. The
 remaining fields are either constant (``rules``, ``seat_order``, ``viewer``) or
@@ -119,7 +83,7 @@ ADVICE_BUDGET_SECONDS: float = 1.0
 
 The greedy baseline decides in one pass and never asks, but the protocol has the
 question, so the answer is a fixed cooperative hint. A future agent that iterates
-would be cut off by nothing here -- add real enforcement before shipping one.
+would be cut off by nothing here, add real enforcement before shipping one.
 """
 
 
@@ -229,8 +193,8 @@ def build_player_view(state: ObservedState, viewer: PlayerId = ME) -> PlayerView
       indistinguishable, so every reveal is the same action.
     * ``discard_pile`` and ``burned_cards`` carry the cards whose ranks were seen
       and omit the rest, so the tuples understate those piles' sizes whenever
-      :func:`view_gaps` reports a gap. The alternative -- padding them with
-      invented ranks -- would be exactly the fabrication this module exists to
+      :func:`view_gaps` reports a gap. The alternative, padding them with
+      invented ranks, would be exactly the fabrication this module exists to
       avoid. ``GreedyAgent`` reads neither field, and the full sizes are carried
       to the interface by the companion's own state instead.
     * ``history`` is empty. The companion keeps its own observation log, and the
@@ -247,7 +211,7 @@ def build_player_view(state: ObservedState, viewer: PlayerId = ME) -> PlayerView
     Raises:
         ObservationError: If the viewer is not a seat, the game is over, the
             viewer's own hand has unrecorded ranks, or the position cannot
-            generate moves -- a missing deck count, most often.
+            generate moves, a missing deck count, most often.
     """
     if viewer not in SEATS:
         raise ObservationError(f"{viewer} is not a seat at this table")
@@ -389,7 +353,7 @@ def _effect_note(state: ObservedState, move: Move) -> str:
             if rank is Rank.NINE:
                 return (
                     "A nine is transparent: it leaves the restriction exactly as it "
-                    f"is -- {describe_constraint(after)}."
+                    f"is ({describe_constraint(after)})."
                 )
             if rank is Rank.JOKER:
                 return "A joker clears the pile's restriction for your opponent."
@@ -410,7 +374,7 @@ class AgentProfile:
 
     A profile is presentation, not behaviour: the agent's own code decides the
     move, and everything here only describes it. That separation is what keeps the
-    explanation honest -- :func:`_play_reasoning` reads the greedy retention table
+    explanation honest, :func:`_play_reasoning` reads the greedy retention table
     back out of the same module the agent scored with, and the random profile
     claims no reasoning at all, because there is none to claim.
 
@@ -436,8 +400,8 @@ GREEDY_CAVEAT: str = (
 )
 """The standing caveat on every greedy recommendation.
 
-It is a fixed string because it is a fact about ``GreedyAgent``'s implementation --
-one pass over ``view.legal_moves`` scored by a fixed retention table -- and not
+It is a fixed string because it is a fact about ``GreedyAgent``'s implementation,
+one pass over ``view.legal_moves`` scored by a fixed retention table, and not
 something to soften per position.
 """
 
@@ -541,16 +505,16 @@ class AgentChoice:
     """Which agent advises this game, and how its tie-breaking is seeded.
 
     The seed lives here rather than on :class:`~shed.agents.AgentSpec` on purpose.
-    A spec deliberately carries no seed -- the match runner draws a fresh one per
+    A spec deliberately carries no seed, the match runner draws a fresh one per
     decision and records it, so replaying a spec cannot resurrect a stale
-    generator -- and the companion has the opposite need: the same position should
+    generator, and the companion has the opposite need: the same position should
     give the same suggestion every time the page asks. Keeping the salt out here
     respects both.
 
     Attributes:
         spec: The participant to build. Its kind is validated on construction.
         seed: Optional salt mixed into the per-position seed. Leave it ``None`` for
-            the default, and set it to shake loose a different tie-break -- worth
+            the default, and set it to shake loose a different tie-break, worth
             something for the random baseline, and visible in greedy only among
             interchangeable face-down cards.
     """
@@ -591,8 +555,8 @@ def _play_reasoning(kind: str, chosen: Play, options: tuple[Move, ...]) -> str:
     """Explain a recommended batch in the terms the chosen strategy actually used.
 
     Only a batch needs this. A blind reveal and a forced pickup are explained by the
-    position rather than by the strategy -- every remaining face-down card is the
-    same decision, and a forced pickup is the only legal action -- so every agent
+    position rather than by the strategy, every remaining face-down card is the
+    same decision, and a forced pickup is the only legal action, so every agent
     gets the same sentence for those.
 
     Args:
@@ -701,9 +665,9 @@ def recommend(
         The suggestion, its reasoning, and what it leaves behind.
 
     Raises:
-        ObservationError: If the position cannot be advised on -- it is not my
+        ObservationError: If the position cannot be advised on, it is not my
             turn, ranks are outstanding, the deck has not been counted, or the game
-            is over -- or if the agent finished without a legal candidate. Call
+            is over, or if the agent finished without a legal candidate. Call
             :func:`~shed.companion.observed.advice_blockers` first to tell the
             operator which.
     """
@@ -737,7 +701,7 @@ def recommend(
         case _:
             reasoning = (
                 "Nothing you hold can go on this pile, so picking it up is the only "
-                "legal action -- shed-v1 has no voluntary pickup."
+                "legal action. There is no voluntary pickup."
             )
     return Recommendation(
         agent=choice,

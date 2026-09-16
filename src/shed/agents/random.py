@@ -1,11 +1,3 @@
-"""The uniform random baseline.
-
-The agent exists to give the gauntlet a floor to measure against and to exercise
-every branch of the engine: sampling uniformly from the engine's own legal-move
-tuple eventually reaches arrangements, hand and face-up batches, blind reveals,
-and forced pickups.
-"""
-
 from shed.agents.base import Agent, TurnContext
 from shed.engine import PlayerView
 

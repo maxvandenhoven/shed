@@ -197,7 +197,7 @@ def test_a_correction_appears_in_the_history_with_its_note() -> None:
     """The operator can read back why the position was changed."""
     state = craft(my_hand=(Rank.THREE,), opponent_hand_unknown=1, deck_count=3)
     line = describe_event(CorrectState(StatePatch(deck_count=2), note="miscounted deck"), state)
-    assert line == "Correction recorded -- miscounted deck"
+    assert line == "Correction recorded, miscounted deck"
 
 
 def test_the_history_says_how_big_a_picked_up_pile_was() -> None:

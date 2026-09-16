@@ -9,7 +9,7 @@ def test_package_imports_with_declared_metadata() -> None:
     This guards the packaging setup: the test relies on ``shed`` being
     importable from the environment, never on ``sys.path`` manipulation.
     """
-    assert shed.RULES_PROFILE_ID == "shed-v1"
+    assert shed.RULES_PROFILE_ID == "standard"
     assert shed.REPLAY_SCHEMA_VERSION == 1
     assert shed.__version__
 

@@ -1,26 +1,3 @@
-"""Immutable supporting types shared by every other Shed engine module.
-
-This module owns the vocabulary of the fixed ``shed-v1`` profile: identifier
-aliases, physical cards, enums, play constraints, the canonical move union, the
-frozen rules configuration, and the engine's two error types. Everything here is
-immutable, hashable, and holds no game state, so any other module may import it
-without creating a cycle.
-
-Every constructor here takes correctly typed domain objects and assumes its
-annotations hold: ``Play`` takes a ``Rank``, never an integer it converts.
-``__post_init__`` checks domain invariants only -- non-negative identifiers,
-positive counts, playable sources, distinct arrangement IDs, joker/suit
-consistency -- and never coerces or type-checks its inputs. ``ty`` enforces the
-annotations for engine callers; untyped external data belongs to the future
-replay and transport layers, which validate it where it is decoded and construct
-these objects before calling the engine.
-
-Moves still canonicalize their *values*: an arrangement sorts its identifiers, so
-two submissions naming the same physical cards compare equal. That is semantic
-canonicalization, not input conversion, and it is what lets the ruleset validate
-a move by membership in the generated legal-move tuple.
-"""
-
 from dataclasses import dataclass, fields
 from enum import Enum, IntEnum
 from typing import NewType
@@ -342,7 +319,7 @@ class Reveal:
 class PickUp:
     """Forced decision taking the whole discard pile into hand.
 
-    Voluntary pickup is not legal in ``shed-v1``: this move is generated only
+    Voluntary pickup is not legal in ``standard``: this move is generated only
     when no playable batch exists.
     """
 
@@ -352,16 +329,16 @@ type Move = Arrange | Play | Reveal | PickUp
 
 @dataclass(frozen=True, slots=True)
 class RulesConfig:
-    """The fixed ``shed-v1`` rules profile.
+    """The fixed ``standard`` rules profile.
 
-    The first release supports exactly one profile. The fields document its
+    Exactly one profile is supported. The fields document its
     numbers rather than offering configuration: :meth:`validate` rejects any
-    changed value so a modified profile can never claim to be ``shed-v1``.
+    changed value so a modified profile can never claim to be ``standard``.
 
     Like every type here, the profile assumes its annotations: the fields are
     integers, and a decoder is responsible for rejecting external data that only
     looks like one (``3.0`` is not ``initial_hand_size``). Validation covers the
-    domain question instead -- whether a correctly typed profile is the one this
+    domain question instead, whether a correctly typed profile is the one this
     release implements.
 
     Attributes:
@@ -376,7 +353,7 @@ class RulesConfig:
             lasts.
     """
 
-    id: str = "shed-v1"
+    id: str = "standard"
     min_players: int = 2
     max_players: int = 5
     joker_count: int = 2
@@ -391,7 +368,7 @@ class RulesConfig:
         return 52 + self.joker_count
 
     def validate(self) -> None:
-        """Check that this configuration is the unmodified ``shed-v1`` profile.
+        """Check that this configuration is the unmodified ``standard`` profile.
 
         Every public entry point that consumes a profile calls this, so a
         correctly typed but unsupported configuration is refused rather than
@@ -447,7 +424,7 @@ def build_deck(config: RulesConfig = DEFAULT_RULES) -> tuple[Card, ...]:
         The 54 canonical cards in identifier order.
 
     Raises:
-        ValueError: If the profile is not the fixed ``shed-v1`` profile.
+        ValueError: If the profile is not the fixed ``standard`` profile.
     """
     config.validate()
     cards: list[Card] = []

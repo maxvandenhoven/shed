@@ -11,7 +11,7 @@ accounted for.
 
 Two tests do run the real thing. One plays a small baseline gauntlet through the
 documented command and verifies every finished match from the file it wrote,
-which is the milestone's acceptance criterion; the other checks that a schedule
+which exercises the documented workflow end to end; the other checks that a schedule
 is identical in a fresh interpreter, which is what rules out Python's randomized
 ``hash()`` sneaking into a seed.
 """

@@ -1,16 +1,3 @@
-"""The deterministic shedding heuristic, with seeded tie-breaking.
-
-The heuristic is an explicit baseline, not a claim of good play: it keeps the
-cards that are hardest to shed for last and spends the cheapest cards first.
-
-Two numbers drive every decision, both from the fixed retention table below:
-during setup a candidate face-up set is worth the sum of its retention scores,
-and during play a batch is preferred by size first and then by how little the
-cards it spends are worth keeping. Whatever is still tied afterwards is settled
-by the agent's seeded generator over the engine's deterministically ordered
-move tuple, so the choice is reproducible from the seed alone.
-"""
-
 from collections.abc import Mapping
 
 from shed.agents.base import Agent, TurnContext
@@ -64,8 +51,8 @@ def _score(move: Move, ranks: Mapping[CardId, Rank]) -> tuple[int, ...]:
     """Score one candidate move; smaller sorts better.
 
     Arrangements sort by the negated retention sum of the cards they leave face
-    up, so the largest sum wins. Plays sort by negated batch size first -- shed
-    as many cards as possible -- and then by the retention score of the rank
+    up, so the largest sum wins. Plays sort by negated batch size first, shed
+    as many cards as possible, and then by the retention score of the rank
     spent, so among equally sized plays the cheapest cards go first. Blind
     reveals and a forced pickup offer nothing to compare: every reveal hides the
     same unknown, and a pickup is the only action when it appears at all.

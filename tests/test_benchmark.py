@@ -295,7 +295,7 @@ class TestReport:
     def test_the_document_is_strict_json(self, report: BenchmarkReport) -> None:
         """Nothing measured may be a NaN, which no strict reader accepts."""
         text = json.dumps(benchmark_document(report), allow_nan=False)
-        assert json.loads(text)["rules"] == "shed-v1"
+        assert json.loads(text)["rules"] == "standard"
 
     def test_the_document_records_provenance_and_sizes(self, report: BenchmarkReport) -> None:
         """A timing without its machine and its fixture sizes cannot be read."""
@@ -328,7 +328,7 @@ class TestReport:
         text = "\n".join(benchmark_summary(report))
         for name in FIXTURE_NAMES:
             assert name in text
-        assert "shed-v1 engine benchmark" in text
+        assert "standard engine benchmark" in text
         assert "includes the acting seat's legal moves" in text
         assert f"{MAX_PLAYOUT_DECISIONS:,}" in text
         assert "Nothing here is a" in text
@@ -384,7 +384,7 @@ class TestCommand:
         finished = run_command(*SHORT_RUN, "--output", str(output))
 
         assert finished.returncode == 0, finished.stderr
-        assert "shed-v1 engine benchmark" in finished.stdout
+        assert "standard engine benchmark" in finished.stdout
         assert "legal moves (get_legal_moves; no view is built):" in finished.stdout
         assert "transitions (apply_move then undo_move, timed as one pair):" in finished.stdout
         assert "observations (observe; includes the acting seat's legal moves):" in finished.stdout

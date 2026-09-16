@@ -1,37 +1,3 @@
-"""Run a sequential Shed gauntlet and report how the agents compared.
-
-Usage from the repository root::
-
-    uv run scripts/gauntlet.py --agents random greedy --deals 100 --seed 42 \
-        --seconds-per-turn 2 --output results/gauntlet.json
-
-The lineup is explicit and holds two to five agents. Each deal in the bank is
-played once per cyclic seat rotation -- ``--deals 100`` with two agents is 200
-matches -- so every participant plays every seat on every deal. That controls
-for seat advantage; it does not enumerate every seating permutation for three or
-more agents, because the participants keep their cyclic order relative to each
-other.
-
-Matches run one at a time. The comparison is about wall-clock decisions, so two
-matches thinking at once would measure the machine's load rather than the
-strategies.
-
-The console gets a compact table; ``--output`` gets the same numbers as JSON,
-with each match's full replay embedded, so a finished match from a gauntlet file
-can be verified exactly like one from ``play.py``. ``--no-replays`` drops those
-embedded documents for a smaller file that can no longer be replayed.
-
-Progress goes to standard error while the run is in flight, so a long gauntlet
-says where it is without polluting the table on standard output. ``--quiet``
-silences it.
-
-This file is an argument parser and nothing else: the schedule, the seeds, the
-accounting, and the report document live in :mod:`shed.gauntlet`, and the
-rendering in :mod:`shed.cli`. Starting it is behind a main guard because every
-decision starts a worker process, and a spawned or forkserver worker re-imports
-this module.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -128,8 +94,8 @@ def _plan(args: argparse.Namespace) -> tuple[tuple[AgentSpec, ...], GauntletConf
     """Turn parsed arguments into a lineup and a run configuration.
 
     Every decoded value is validated here, outside the engine and outside the
-    gauntlet: the table size, the dealing seat, and -- inside the configuration
-    itself -- the deal count and the timing settings.
+    gauntlet: the table size, the dealing seat, and, inside the configuration
+    itself, the deal count and the timing settings.
 
     Args:
         args: The parsed arguments.
@@ -204,7 +170,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     run = _play(participants, config, quiet=args.quiet)
 
     # The artifact is written before anything is printed, so a console that goes
-    # away -- a pipe into `head`, a closed terminal -- cannot cost a long run.
+    # away, a pipe into `head`, a closed terminal, cannot cost a long run.
     written = None
     if args.output is not None:
         try:

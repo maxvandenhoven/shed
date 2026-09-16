@@ -1,25 +1,3 @@
-"""The recoverable session document: a versioned start, a log, and what they fold to.
-
-A session is the whole game, and it is *only* two things: the position the
-operator entered when they started tracking, and every observation since, in
-order. The position on screen is always the fold of that log, never a separately
-maintained copy of it, which is what makes the recovery features fall out of the
-design rather than being bolted on. Undo pops the last observation. A correction
-appends one. The action history is the log printed. Export is the document written
-out, and import is one read back.
-
-The browser owns the document and saves it after every accepted observation; this
-module is what reads it. So the server keeps no session state at all: restarting
-Python, or losing it mid-game, costs nothing the browser cannot resend. That is
-also why a document that no longer folds cleanly does not raise here.
-:func:`derive` stops at the observation that failed, reports it, and hands back the
-position it reached, so a session damaged by a bad import or a stale schema can
-still be read, undone, and exported rather than being dead on arrival.
-
-Every payload the phone renders comes from :func:`render`, which is a pure function
-of the document.
-"""
-
 from __future__ import annotations
 
 import hashlib
@@ -100,7 +78,7 @@ describe different things and will not change together. A document from a future
 version is refused with its number in the message rather than being read
 optimistically.
 
-Version 2 added the agent choice. Version 1 is still read -- see
+Version 2 added the agent choice. Version 1 is still read, see
 :data:`READABLE_SCHEMA_VERSIONS`.
 """
 
@@ -109,7 +87,7 @@ READABLE_SCHEMA_VERSIONS: frozenset[int] = frozenset({1, 2})
 
 A version bump must not cost somebody a game in progress, which is the whole point
 of stamping one. A version 1 document has no agent choice, and the only agent it
-could have been played with is the default, so it upgrades by taking that -- and
+could have been played with is the default, so it upgrades by taking that, and
 is rewritten as version 2 the first time the server answers about it.
 """
 
@@ -121,7 +99,7 @@ class Session:
     Attributes:
         schema_version: The document version; see
             :data:`COMPANION_SCHEMA_VERSION`.
-        initial: The position the operator entered when tracking started -- a fresh
+        initial: The position the operator entered when tracking started, a fresh
             deal after the physical swap, or a game already in progress.
         events: Every observation since, oldest first.
         agent: Which strategy advises this game. It is chosen at setup and fixed
@@ -324,7 +302,7 @@ def describe_event(event: ObservationEvent, before: ObservedState) -> str:
     """Describe one observation as a history line.
 
     The line is written against the position the observation was folded into, so it
-    can say what the entry actually did -- how big the pile that was picked up was,
+    can say what the entry actually did, how big the pile that was picked up was,
     whether a revealed card went down or came back.
 
     Args:
@@ -364,7 +342,7 @@ def describe_event(event: ObservationEvent, before: ObservedState) -> str:
             source = "drew" if reason is PendingReason.DRAW else "picked up"
             return f"You recorded what you {source}: {_rank_list(ranks)}"
         case CorrectState(note=note):
-            suffix = f" -- {note}" if note else ""
+            suffix = f", {note}" if note else ""
             return f"Correction recorded{suffix}"
     raise ValueError(f"Unknown observation {event!r}")
 

@@ -1,40 +1,6 @@
-"""Shed: an engine, agents, and gauntlet for the hidden-information card game Shed.
-
-This module exports project metadata only; import the engine from
-:mod:`shed.engine` and the agents from :mod:`shed.agents`.
-
-The first release is complete. It ships the deterministic engine -- the
-canonical deck, dealing, authoritative state, immutable player views, the event
-vocabulary with private-event filtering, legal-move generation, and atomic setup
-and play transitions with snapshot undo -- the agent layer on top of it, and the
-timed match runner in :mod:`shed.match`, which owns clocks, worker processes,
-the selection policy, and the records a match leaves behind. On top of those,
-:mod:`shed.replay` writes and verifies versioned JSON replays and is the
-project's only match-serialization boundary, :mod:`shed.gauntlet` schedules and
-aggregates sequential evaluations on top of the runner, and :mod:`shed.cli`
-holds what the command-line scripts share. :mod:`shed.benchmark` stands apart
-from that stack: it measures the engine alone and deliberately imports neither
-the runner nor the agents, so no measurement can include worker startup.
-
-Importing this package is deliberately cheap. ``__version__`` is resolved on
-first access rather than at import time, because reading distribution metadata
-pulls in ``importlib.metadata`` and its dependencies -- measured at roughly 60 ms
-of the 115 ms it took to import :mod:`shed.match`. The match runner starts a
-fresh interpreter per decision, so that import cost was being paid on every
-single timed decision to compute a string almost nothing reads. Only the replay
-writer needs the version, once per match.
-
-Attributes:
-    RULES_PROFILE_ID: Identifier of the fixed rules profile this package targets.
-    REPLAY_SCHEMA_VERSION: Version of the JSON replay schema this package targets.
-    __version__: Installed distribution version, or a sentinel when the package
-        is imported from a source tree without installed metadata. Resolved on
-        first access and not cached, which is why nothing hot should read it.
-"""
-
 __all__ = ["REPLAY_SCHEMA_VERSION", "RULES_PROFILE_ID", "__version__"]
 
-RULES_PROFILE_ID = "shed-v1"
+RULES_PROFILE_ID = "standard"
 REPLAY_SCHEMA_VERSION = 1
 
 
